@@ -26,3 +26,19 @@ that.
 
 Replace any synthesized pair with a real capture if a suitable machine becomes
 available.
+
+## Replacing a synthesized fixture with a real one
+
+`scripts/capture-fixture.sh` captures a real before/after pair around exactly
+one generation, and writes a provenance header recording the host, endpoint,
+model and the response's own `usage` block:
+
+```bash
+./scripts/capture-fixture.sh http://127.0.0.1:30000 sglang: sglang
+```
+
+It refuses to write anything if `/metrics` is missing, carries no lines with
+the expected prefix, or is byte-identical before and after a generation — the
+three ways a capture would be worthless. Afterwards, assert the printed deltas
+against the printed `usage` block in `test/prometheus.test.mjs` and update the
+table above.
