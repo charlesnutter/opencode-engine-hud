@@ -23,6 +23,7 @@
 import type { TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
+import { fetchKoboldPerf, koboldTurn } from "./koboldcpp"
 import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
 
 interface Config {
@@ -36,6 +37,7 @@ interface Config {
   aphroditeBase: string
   lmdeployBase: string
   llamafileBase: string
+  koboldBase: string
 }
 
 const nn = (v: unknown, d = 1) =>
@@ -279,6 +281,30 @@ async function llamacppLine(
   ].filter(Boolean).join("\n")
 }
 
+// ---- Tier 2: KoboldCpp enrichment — /api/extra/perf, last-request ---------
+// Unlike every Prometheus engine here, this one hands over the previous
+// request already reduced, with prefill and decode timed separately, so there
+// is no differencing to do. The only state kept is the generation counter,
+// which is what distinguishes "this turn's numbers" from a stale sample (see
+// koboldcpp.ts). Validated live against KoboldCpp v1.121 on Apple Silicon.
+const koboldPrevGens = new Map<string, number>()
+
+async function koboldLine(base: string, model: string): Promise<string | null> {
+  const perf = await fetchKoboldPerf(base)
+  if (!perf) return null // unreachable, or not a KoboldCpp server
+  const prev = koboldPrevGens.get(base)
+  koboldPrevGens.set(base, perf.total_gens)
+  const t = koboldTurn(perf, prev)
+  if (!t) return null // nothing new to attribute to this turn
+  return [
+    `KoboldCpp  ${short(model)}`,
+    t.decodeTokS !== undefined ? `${nn(t.decodeTokS)} tok/s` : "",
+    t.prefillTokS !== undefined ? `prefill ${ni(t.prefillTokS)} tok/s` : "",
+    `${ni(t.completionTokens)} tok  ${nn(t.prefillS + t.decodeS, 2)}s`,
+    t.draftAcceptRate !== undefined ? `draft ${ni(t.draftAcceptRate * 100)}% accepted` : "",
+  ].filter(Boolean).join("\n")
+}
+
 // ---- Tier 2: vLLM / SGLang enrichment — Prometheus, diffed across the turn -
 // Both publish cumulative counters that, unlike llama.cpp/oMLX, advance DURING
 // generation rather than only at completion. That only matters for a
@@ -377,6 +403,7 @@ const tui: TuiPlugin = async (api, options) => {
     aphroditeBase: str(opts.aphroditeBaseUrl, "APHRODITE_BASE_URL", "http://127.0.0.1:2242").replace(/\/+$/, ""),
     lmdeployBase: str(opts.lmdeployBaseUrl, "LMDEPLOY_BASE_URL", "http://127.0.0.1:23333").replace(/\/+$/, ""),
     llamafileBase: str(opts.llamafileBaseUrl, "LLAMAFILE_BASE_URL", "http://127.0.0.1:8003").replace(/\/+$/, ""),
+    koboldBase: str(opts.koboldcppBaseUrl, "KOBOLDCPP_BASE_URL", "http://127.0.0.1:5001").replace(/\/+$/, ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -427,6 +454,8 @@ const tui: TuiPlugin = async (api, options) => {
     // llamafile is llama.cpp-derived and publishes the identical metric names,
     // so it reuses this adapter verbatim — only the URL and baseline differ.
     else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model)
+    else if (provider === "koboldcpp" || provider === "kobold")
+      line = await koboldLine(cfg.koboldBase, model)
     else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t)
     else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t)
     else if (provider === "vllmmlx" || provider === "vllm-mlx")

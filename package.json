@@ -47,11 +47,13 @@
   },
   "files": [
     "tui.tsx",
+    "prometheus.ts",
+    "koboldcpp.ts",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test/prometheus.test.mjs"
+    "test": "bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs"
   }
 }

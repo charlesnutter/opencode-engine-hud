@@ -10,8 +10,17 @@ came from, because "the test passes" means something different depending on it.
 | `vllm-idle.prom`, `vllm-busy.prom` | **Real capture**, inherited from the inference-hud VS Code extension. Real bytes a real vLLM emitted, but not captured here and not cross-checked against a response body. |
 | `sglang-stream-before.prom`, `sglang-stream-after.prom` | **Live capture.** SGLang on its MLX/Apple-Silicon backend (`SGLANG_USE_MLX=1 --enable-metrics`), bracketing one real **streaming** generation (`usage: {prompt_tokens: 35, completion_tokens: 25}`). This is the path OpenCode uses. |
 | `sglang-before.prom`, `sglang-after.prom` | **Live capture**, same server, one **non-streaming** generation. Kept deliberately: SGLang stamps TTFT at completion when not streaming, so these are the regression case for the degenerate decode-window guard. |
+| `koboldcpp-before.json`, `koboldcpp-after.json` | **Live capture.** KoboldCpp v1.121, macOS arm64, bracketing one generation (`usage: {prompt_tokens: 16, completion_tokens: 83}`). Short prompt, so `last_process_time` sits on the ~1ms timer floor and the server reports 16000 tok/s prefill — the regression case for the floor guard. |
+| `koboldcpp-novel-*.json` | **Live capture.** A long prompt with no prefix-cache overlap, so the prefill timer measures real work (0.197s over 2818 tokens). The positive case: prefill survives the floor. |
+| `koboldcpp-cachehit-*.json` | **Live capture.** The identical prompt re-sent, a full prefix-cache hit. The server reports `process_time: 0.0` and `speed: 0` — not a huge rate. |
+| `koboldcpp-longprompt-*.json` | **Live capture.** A *partial* cache hit: 2016 prompt tokens but only the uncached suffix timed, reported as 18000 tok/s. Pins the known, undetectable overstatement. |
 | `lmdeploy-before.prom`, `lmdeploy-after.prom` | **Synthesized.** LMDeploy is CUDA-only. Names and the `{model_name,engine}` label shape are verified against `lmdeploy/metrics/loggers.py`; values chosen to make the diff arithmetic checkable. |
 | *(Aphrodite has no fixture)* | Its test **derives** input by swapping `vllm:` → `aphrodite:` in the real vLLM capture, which is precisely the documented difference between them. No real Aphrodite bytes exist here. |
+
+KoboldCpp fixtures are JSON, not Prometheus text, and each carries a
+`_provenance` object recording the host, server version, scenario and the
+response body's own `usage` for the generation it brackets — the tests assert
+against that block rather than against numbers typed into the test file.
 
 ## What a passing test does and doesn't tell you
 

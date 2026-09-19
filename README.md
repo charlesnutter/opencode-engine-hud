@@ -37,6 +37,7 @@ get the universal layer.
 | `omlx` | ✅ (recovered, per-turn when 1 req/interval) | ❌ | ✅ (recovered) | ✅ | ✅ cached tokens | — | live |
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `llamafile` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
+| `koboldcpp` | ✅ **engine-timed decode phase** | ❌ (universal TTFT still shows) | ✅ **engine-timed prefill phase**, when the prompt is big enough to time | ✅ | — | speculative-draft accept % (with a draft model) | **live** |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
 | `sglang` | ✅ **engine-measured** on streaming turns, excludes prefill | ✅ per-turn when one request lands, else window average | ❌ | ✅ | ✅ cached tokens | — | **live** (via its MLX backend on Apple Silicon) |
 | `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
@@ -85,6 +86,21 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   an MLX/Metal compute backend, so its `/metrics` *is* vLLM's. Every field name
   in our spec was confirmed against a live instance, with deltas cross-checked
   against the response's own `usage`.
+- **KoboldCpp is the only engine here that needs no arithmetic from us.**
+  `/api/extra/perf` reports the previous request already reduced, with prefill
+  and decode timed as separate phases, so both rates are the engine's own
+  measurements. Three things the live server taught us, none of them in the
+  docs: its phase timers quantise to about 1ms, so a short prompt yields
+  nonsense like "16000 tok/s" prefill (suppressed below a 10ms floor); a *full*
+  prefix-cache hit reports `process_time: 0.0` rather than a huge rate; and a
+  *partial* cache hit silently overstates prefill, because `last_input_count`
+  counts the whole prompt while `last_process_time` covers only what was
+  recomputed. That last one is documented, not fixed — the endpoint exposes no
+  cached-token count to correct it with.
+- **KoboldCpp's streaming emits no usage chunk**, so for a streamed turn the
+  universal layer never sees token counts at all. This endpoint is the only
+  source of them, which makes the enrichment tier load-bearing here rather
+  than merely additive.
 - **SGLang is live-validated via its MLX backend.** SGLang ships an opt-in
   Apple Silicon path (`SGLANG_USE_MLX=1`), and `--enable-metrics` does work
   there — its Apple Metal docs page never says so. Every spec field was
@@ -168,6 +184,11 @@ Per-engine notes:
   [vllm-metal](https://github.com/vllm-project/vllm-metal)
   (`brew tap vllm-project/vllm-metal …`) and `vllm serve <model>` works
   normally — it's upstream vLLM, so this adapter needs no changes.
+- **KoboldCpp** — provider id `koboldcpp` (or `kobold`), default port 5001.
+  Nothing to enable: `/api/extra/perf` is always on. Point OpenCode at its
+  OpenAI-compatible `/v1/` endpoint. On Apple Silicon grab the
+  `koboldcpp-mac-arm64` release binary (64MB) and run
+  `./koboldcpp --model <model.gguf> --port 5001`.
 - **SGLang** — provider id `sglang`, default port 30000. Also needs
   `--enable-metrics` on the server (off by default) or `/metrics` won't exist
   at all. On Apple Silicon, use its opt-in MLX backend: swap in the alternate
@@ -226,6 +247,7 @@ just falls back to the universal layer.
 | `llamacppBaseUrl` | `LLAMACPP_BASE_URL` | `http://127.0.0.1:8080` |
 | `vllmBaseUrl` | `VLLM_BASE_URL` | `http://127.0.0.1:8000` |
 | `sglangBaseUrl` | `SGLANG_BASE_URL` | `http://127.0.0.1:30000` |
+| `koboldcppBaseUrl` | `KOBOLDCPP_BASE_URL` | `http://127.0.0.1:5001` |
 | `vllmMlxBaseUrl` | `VLLM_MLX_BASE_URL` | `http://127.0.0.1:8000` |
 | `aphroditeBaseUrl` | `APHRODITE_BASE_URL` | `http://127.0.0.1:2242` |
 | `lmdeployBaseUrl` | `LMDEPLOY_BASE_URL` | `http://127.0.0.1:23333` |
@@ -260,11 +282,10 @@ npm test
   telemetry endpoint at all.
 - **Worth a look, not yet built**: **Modular MAX serve** (rich `maxserve_*`
   metrics including TTFT and inter-token latency, but Apple Silicon support
-  unconfirmed); **KoboldCpp** (`/api/extra/perf` carries a complete
-  last-request set — `last_input_count`, `last_token_count`,
-  `last_process_time`, `last_eval_time` — and runs on macOS arm64, so it could
-  be live-validated, but needs a ~700MB download); (llamafile is done —
-  it did work with the `llamacpp` adapter unchanged.)
+  unconfirmed); (llamafile is done — it did work with the
+  `llamacpp` adapter unchanged.)
+- ~~**KoboldCpp**~~ — done and live-validated. The Mac arm64 binary is 64MB,
+  not the ~700MB guessed here earlier; `/api/extra/perf` needs no flag.
 - ~~**vllm-metal**~~ — done: confirmed the existing `vllm` adapter works
   against it unchanged, which moved the vLLM tier to live-validated.
 - ~~A live vLLM/SGLang server~~ — done: both are now live-validated
