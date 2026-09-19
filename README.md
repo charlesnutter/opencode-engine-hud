@@ -38,9 +38,9 @@ get the universal layer.
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `llamafile` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
-| `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
+| `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **synthetic fixtures** (CUDA-only engine) |
 | `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
-| `aphrodite` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
+| `aphrodite` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **derived fixture** (CUDA-only engine) |
 | `lmdeploy` | ✅ **engine-timed decode phase** | ✅ per-turn | ✅ **engine-timed prefill phase** | ✅ | — | — | **synthetic fixtures** (CUDA-only engine) |
 | anything else (Ollama, MLX-LM, LM Studio, …) | ✅ | ✅ per-turn | ❌ | ✅ | ❌ | — | live |
 
@@ -85,9 +85,12 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   an MLX/Metal compute backend, so its `/metrics` *is* vLLM's. Every field name
   in our spec was confirmed against a live instance, with deltas cross-checked
   against the response's own `usage`.
-- **SGLang and Aphrodite remain fixtures-only** — both need CUDA. They're
-  validated against real captured `/metrics` text (`fixtures/`,
-  `test/prometheus.test.mjs` — `npm test`), not a live server.
+- **SGLang, Aphrodite and LMDeploy are fixtures-only, and their fixtures are
+  synthesized** — all three need CUDA. Their metric names come from each
+  engine's source, but no live server has confirmed them, and the values are
+  plausible rather than measured. A passing test proves the parser and the
+  diff arithmetic are right; it does not prove the engine emits these names.
+  See [`fixtures/README.md`](fixtures/README.md) for per-file provenance.
 
 ## Adding an engine to `opencode.json`
 
