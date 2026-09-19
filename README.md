@@ -38,7 +38,7 @@ get the universal layer.
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `llamafile` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
-| `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **synthetic fixtures** (CUDA-only engine) |
+| `sglang` | ✅ **engine-measured** on streaming turns, excludes prefill | ✅ per-turn when one request lands, else window average | ❌ | ✅ | ✅ cached tokens | — | **live** (via its MLX backend on Apple Silicon) |
 | `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
 | `aphrodite` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **derived fixture** (CUDA-only engine) |
 | `lmdeploy` | ✅ **engine-timed decode phase** | ✅ per-turn | ✅ **engine-timed prefill phase** | ✅ | — | — | **synthetic fixtures** (CUDA-only engine) |
@@ -52,7 +52,7 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
 - **llama.cpp and oMLX have no prefill/decode split from their own data**
   beyond what's differenced from cumulative counters; the panel's "prefill
   tok/s" for these two *is* that differenced figure, not a separate timing.
-- **vLLM/SGLang's tok/s is not vLLM's own number.** Splitting decode from
+- **vLLM's tok/s is not vLLM's own number.** Splitting decode from
   prefill needs continuous polling mid-request, which this plugin doesn't do;
   the rate shown instead reuses OpenCode's own streaming-delta timing (the
   same source the universal layer uses for every other provider). Their TTFT
@@ -75,7 +75,7 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   publishes both a TTFT *and* an end-to-end duration histogram, so when exactly
   one request lands in the window — which is the norm, since OpenCode issues one
   per turn — the deltas are that turn's own values, and decode rate comes out as
-  tokens ÷ (duration − TTFT), excluding prefill. vLLM/SGLang/Aphrodite publish
+  tokens ÷ (duration − TTFT), excluding prefill. vLLM and Aphrodite publish
   no duration histogram, so they fall back to OpenCode's turn timing and their
   TTFT stays a window average (labelled `(avg)`). If several requests blend into
   one window, vllm-mlx drops the per-request rate rather than report a blended
@@ -85,11 +85,21 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   an MLX/Metal compute backend, so its `/metrics` *is* vLLM's. Every field name
   in our spec was confirmed against a live instance, with deltas cross-checked
   against the response's own `usage`.
-- **SGLang, Aphrodite and LMDeploy are fixtures-only, and their fixtures are
-  synthesized** — all three need CUDA. Their metric names come from each
-  engine's source, but no live server has confirmed them, and the values are
-  plausible rather than measured. A passing test proves the parser and the
-  diff arithmetic are right; it does not prove the engine emits these names.
+- **SGLang is live-validated via its MLX backend.** SGLang ships an opt-in
+  Apple Silicon path (`SGLANG_USE_MLX=1`), and `--enable-metrics` does work
+  there — its Apple Metal docs page never says so. Every spec field was
+  confirmed against a live instance with deltas cross-checked against the
+  response's own `usage`. Two things only a live server could have shown: its
+  `cached_tokens_total` counter is registered lazily and is simply absent until
+  the first prefix-cache hit, and on a **non-streaming** turn it stamps TTFT at
+  completion, so TTFT and end-to-end latency collapse onto each other. The
+  synthetic fixtures this replaced asserted a metric name the real server never
+  emitted.
+- **Aphrodite and LMDeploy are fixtures-only, and their fixtures are
+  synthesized** — both need CUDA. Their metric names come from each engine's
+  source, but no live server has confirmed them, and the values are plausible
+  rather than measured. A passing test proves the parser and the diff
+  arithmetic are right; it does not prove the engine emits these names.
   See [`fixtures/README.md`](fixtures/README.md) for per-file provenance.
 
 ## Adding an engine to `opencode.json`
@@ -160,7 +170,13 @@ Per-engine notes:
   normally — it's upstream vLLM, so this adapter needs no changes.
 - **SGLang** — provider id `sglang`, default port 30000. Also needs
   `--enable-metrics` on the server (off by default) or `/metrics` won't exist
-  at all.
+  at all. On Apple Silicon, use its opt-in MLX backend: swap in the alternate
+  pyproject (`mv python/pyproject_other.toml python/pyproject.toml`), then
+  `SGLANG_BUILD_RUST_EXTS=none uv pip install -e "python[srt_mps]"` and launch
+  with `SGLANG_USE_MLX=1 python -m sglang.launch_server --model-path <mlx-model>
+  --disable-cuda-graph --enable-metrics`. The extra is `srt_mps` and the
+  procedure is the one in `.github/workflows/pr-test-mlx.yml`; the published
+  docs page names an `all_mps` extra that the shipped pyproject does not have.
 - **vllm-mlx** — provider id `vllmmlx` (or `vllm-mlx`), default port 8000.
   The MLX-native Apple Silicon server, installable with `pip install vllm-mlx`.
   Start it with the metrics flag, which is **`--enable-metrics`**, not
@@ -251,8 +267,8 @@ npm test
   it did work with the `llamacpp` adapter unchanged.)
 - ~~**vllm-metal**~~ — done: confirmed the existing `vllm` adapter works
   against it unchanged, which moved the vLLM tier to live-validated.
-- A live vLLM/SGLang server to validate the enrichment tier against real
-  traffic, not just captured fixtures.
+- ~~A live vLLM/SGLang server~~ — done: both are now live-validated
+  (vLLM via vllm-metal, SGLang via its MLX backend).
 - An optional keybind to toggle the panel independently of the sidebar.
 - Publish to npm (`@charlesnutter/opencode-hud`) and list in the [OpenCode
   ecosystem](https://opencode.ai/docs/ecosystem#plugins).

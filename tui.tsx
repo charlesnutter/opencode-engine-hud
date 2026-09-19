@@ -290,8 +290,10 @@ async function llamacppLine(
 // mid-request polling to split decode from prefill, and OpenCode's streaming
 // events already have that split for free.
 //
-// Not run against a live vLLM/SGLang server (both CUDA-only) — validated
-// against real captured /metrics text in test/prometheus.test.mjs instead.
+// SGLang is validated live on this machine via its MLX/Apple-Silicon backend
+// (SGLANG_USE_MLX=1 --enable-metrics); vLLM likewise via vllm-metal. Aphrodite
+// and LMDeploy need CUDA, so those are validated against real captured
+// /metrics text in test/prometheus.test.mjs instead.
 const promPrev = new Map<string, PromSample>() // keyed by provider id, not URL
 
 async function prometheusLine(
@@ -314,7 +316,9 @@ async function prometheusLine(
 
   // Prefer the engine's own measured decode rate (duration minus TTFT, one
   // request) where it publishes the histograms for it; otherwise fall back to
-  // OpenCode's turn timing, which is all vLLM/SGLang can support.
+  // OpenCode's turn timing. The engine-derived figure is dropped when the
+  // decode window is implausibly short (see MIN_DECODE_SHARE), so a
+  // non-streaming caller falls back here rather than showing clock noise.
   const fallback = turnRate(diff.completionTokens, info, turn)
   const decodeTokS = diff.decodeTokS ?? fallback.decodeTokS
   const total = diff.durationS ?? fallback.total

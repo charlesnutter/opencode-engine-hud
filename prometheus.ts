@@ -39,6 +39,13 @@ export const VLLM_SPEC: PromSpec = {
   ttftCount: "vllm:time_to_first_token_seconds_count",
 }
 
+/**
+ * Names verified against sglang/srt/observability/metrics_collector.py. It
+ * publishes an end-to-end latency histogram alongside TTFT, so a single turn's
+ * decode window is recoverable exactly (duration minus TTFT) rather than from
+ * the caller's wall clock. Counters carry an `is_streaming` label, so every
+ * series for a name has to be summed.
+ */
 export const SGLANG_SPEC: PromSpec = {
   prefix: "sglang:",
   promptTokens: "sglang:prompt_tokens_total",
@@ -46,6 +53,8 @@ export const SGLANG_SPEC: PromSpec = {
   cachedTokens: "sglang:cached_tokens_total",
   ttftSum: "sglang:time_to_first_token_seconds_sum",
   ttftCount: "sglang:time_to_first_token_seconds_count",
+  durationSum: "sglang:e2e_request_latency_seconds_sum",
+  durationCount: "sglang:e2e_request_latency_seconds_count",
 }
 
 /**
@@ -165,6 +174,14 @@ export async function fetchPromSample(base: string, spec: PromSpec): Promise<Pro
   }
 }
 
+/**
+ * Smallest share of a request's total duration that a derived decode window
+ * has to occupy to be believable. Below this, TTFT and end-to-end latency were
+ * effectively recorded at the same instant (see diffPromSamples) and the
+ * subtraction is measuring clock noise, not decoding.
+ */
+const MIN_DECODE_SHARE = 0.01
+
 export interface PromDiff {
   completionTokens: number
   promptTokens: number
@@ -220,9 +237,18 @@ export function diffPromSamples(prev: PromSample, now: PromSample): PromDiff | n
     if (decodeS > 0) decodeTokS = completionTokens / decodeS
   }
   // Otherwise derive the decode window as duration minus TTFT (vllm-mlx).
+  //
+  // Only sound when the request actually streamed. A non-streaming request has
+  // no first-token event to observe, so some engines stamp TTFT at completion
+  // and the two histograms collapse onto each other: SGLang on a non-streaming
+  // turn reports TTFT 2.989060s against an e2e of 2.989067s — a 6.6us "decode
+  // window" that yields 15.7M tok/s. Requiring decode to be a real share of
+  // the request rejects that without needing to know which engine did it.
   if (decodeTokS === undefined && exact && dDurCount === 1 && ttft !== undefined && durationS !== undefined) {
     const decodeWindow = durationS - ttft
-    if (decodeWindow > 0) decodeTokS = completionTokens / decodeWindow
+    if (decodeWindow > 0 && decodeWindow >= durationS * MIN_DECODE_SHARE) {
+      decodeTokS = completionTokens / decodeWindow
+    }
   }
   const dPreCount = now.prefillTimeCount - prev.prefillTimeCount
   if (dPreCount === 1 && promptTokens > 0) {

@@ -1,11 +1,11 @@
 // Validates prometheus.ts against real captured /metrics text (fixtures/,
 // taken from the inference-hud VS Code extension's own verified captures).
 //
-// vLLM, SGLang and Aphrodite are CUDA-only, so those are validated against
-// captured fixtures — real bytes those engines produced, not hand-written
-// text. The vllm-mlx fixtures are different: they were captured live from a
-// local server on this machine, before and after a single real generation,
-// so its assertions check values cross-checked against that response's own
+// vLLM and Aphrodite are CUDA-only, so those are validated against captured
+// fixtures — real bytes those engines produced, not hand-written text. The
+// vllm-mlx and SGLang fixtures are different: they were captured live from a
+// local server on this machine, before and after a single real generation, so
+// their assertions check values cross-checked against that response's own
 // `usage`. Run with: bun test/prometheus.test.mjs
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
@@ -86,27 +86,46 @@ test("vLLM: counters running backwards are treated as a restart, not a turn", ()
   assert.equal(diffPromSamples(before, after), null)
 })
 
-// ---- SGLang: parses a real capture, summing the labelled cache counter ----
-test("SGLang: parses the real idle capture's counters exactly", () => {
-  const s = parsePromSample(fixture("sglang-idle.prom"), SGLANG_SPEC)
-  assert.ok(s)
-  assert.equal(s.prompt, 2199)
-  assert.equal(s.generation, 400)
-  // cached_tokens_total is labelled by cache_source; only "device" is present
-  // in this capture, so the sum equals that one series.
-  assert.equal(s.cached, 2198)
-  assert.equal(s.ttftCount, 3)
-  assert.ok(Math.abs(s.ttftSum - 0.8412) < 1e-9)
-})
-
-test("SGLang: diff across a turn gives exact tokens", () => {
-  const idle = fixture("sglang-idle.prom")
-  const after = idle.replace(/(sglang:generation_tokens_total\{[^}]*\}) 400\.0/, "$1 487.0")
-  const before = parsePromSample(idle, SGLANG_SPEC)
-  const now = parsePromSample(after, SGLANG_SPEC)
+// ---- SGLang: live capture from the MLX/Apple-Silicon backend --------------
+// Captured from SGLang running with SGLANG_USE_MLX=1 --enable-metrics, which
+// confirms the metrics endpoint serves on the MLX path at all — the Apple
+// Metal docs page does not mention /metrics.
+test("SGLang: live streaming turn matches the response's own usage", () => {
+  const before = parsePromSample(fixture("sglang-stream-before.prom"), SGLANG_SPEC)
+  const now = parsePromSample(fixture("sglang-stream-after.prom"), SGLANG_SPEC)
+  assert.ok(before && now)
   const diff = diffPromSamples(before, now)
   assert.ok(diff)
-  assert.equal(diff.completionTokens, 87)
+  // The generation between the two captures reported
+  // usage {prompt_tokens: 35, completion_tokens: 25}.
+  assert.equal(diff.completionTokens, 25)
+  assert.equal(diff.promptTokens, 35)
+  assert.ok(diff.ttftExact)
+  // Prefix-cache hit on a prompt seen earlier in the session.
+  assert.equal(diff.cachedTokens, 34)
+})
+
+test("SGLang: streaming turn yields a plausible engine-derived decode rate", () => {
+  const before = parsePromSample(fixture("sglang-stream-before.prom"), SGLANG_SPEC)
+  const now = parsePromSample(fixture("sglang-stream-after.prom"), SGLANG_SPEC)
+  const diff = diffPromSamples(before, now)
+  // TTFT 0.243s inside a 0.294s request leaves a ~51ms decode window for 25
+  // tokens. The point is the order of magnitude: a real rate, not clock noise.
+  assert.ok(diff.decodeTokS > 100 && diff.decodeTokS < 5000, `got ${diff.decodeTokS}`)
+  assert.ok(diff.durationS > diff.ttft)
+})
+
+test("SGLang: a non-streaming turn reports no decode rate rather than a fake one", () => {
+  // Non-streaming has no first-token event, so SGLang stamps TTFT at
+  // completion: this real capture has TTFT 0.2530297s against an e2e of
+  // 0.2530313s. Subtracting gives a 1.6us window and 15.7M tok/s, which the
+  // MIN_DECODE_SHARE guard must reject.
+  const before = parsePromSample(fixture("sglang-before.prom"), SGLANG_SPEC)
+  const now = parsePromSample(fixture("sglang-after.prom"), SGLANG_SPEC)
+  const diff = diffPromSamples(before, now)
+  assert.ok(diff)
+  assert.equal(diff.completionTokens, 25)
+  assert.equal(diff.decodeTokS, undefined)
 })
 
 // ---- sumLabeledMetric: the `_created` line trap ----------------------------
@@ -131,7 +150,7 @@ test("cross-check: vLLM text does not parse against the SGLang spec", () => {
   assert.equal(parsePromSample(fixture("vllm-idle.prom"), SGLANG_SPEC), null)
 })
 test("cross-check: SGLang text does not parse against the vLLM spec", () => {
-  assert.equal(parsePromSample(fixture("sglang-idle.prom"), VLLM_SPEC), null)
+  assert.equal(parsePromSample(fixture("sglang-stream-after.prom"), VLLM_SPEC), null)
 })
 
 // ---- vllm-mlx: captured LIVE, before/after one real generation ------------
