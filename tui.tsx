@@ -35,6 +35,7 @@ interface Config {
   vllmMlxBase: string
   aphroditeBase: string
   lmdeployBase: string
+  llamafileBase: string
 }
 
 const nn = (v: unknown, d = 1) =>
@@ -202,7 +203,7 @@ interface LlamaCppCounters {
   predictedTokens: number
   predictedSeconds: number
 }
-let llamacppPrev: LlamaCppCounters | undefined
+const llamacppPrev = new Map<string, LlamaCppCounters>()
 
 async function getText(url: string): Promise<string | null> {
   const ctrl = new AbortController()
@@ -232,8 +233,8 @@ function parsePrometheus(text: string): Record<string, number> {
   return out
 }
 
-async function llamacppCounters(cfg: Config): Promise<LlamaCppCounters | null> {
-  const text = await getText(`${cfg.llamacppBase}/metrics`)
+async function llamacppCounters(base: string): Promise<LlamaCppCounters | null> {
+  const text = await getText(`${base}/metrics`)
   if (text === null) return null
   const v = parsePrometheus(text)
   return {
@@ -244,11 +245,16 @@ async function llamacppCounters(cfg: Config): Promise<LlamaCppCounters | null> {
   }
 }
 
-async function llamacppLine(cfg: Config, model: string): Promise<string | null> {
-  const now = await llamacppCounters(cfg)
+async function llamacppLine(
+  key: string,
+  base: string,
+  label: string,
+  model: string
+): Promise<string | null> {
+  const now = await llamacppCounters(base)
   if (!now) return null // unreachable, or started without --metrics
-  const prev = llamacppPrev
-  llamacppPrev = now
+  const prev = llamacppPrev.get(key)
+  llamacppPrev.set(key, now)
   if (!prev || now.predictedTokens <= prev.predictedTokens) {
     // No baseline yet (first turn since launch), or nothing moved (answered
     // from cache faster than we could sample, or a concurrent caller's turn
@@ -266,7 +272,7 @@ async function llamacppLine(cfg: Config, model: string): Promise<string | null> 
   const decodeTokS = decodeS > 0 ? completionTokens / decodeS : undefined
   const prefillTokS = prefillS > 0 && promptTokens > 0 ? promptTokens / prefillS : undefined
   return [
-    `llama.cpp  ${short(model)}`,
+    `${label}  ${short(model)}`,
     decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s` : "",
     prefillTokS !== undefined ? `prefill ${ni(prefillTokS)} tok/s` : "",
     `${ni(completionTokens)} tok  ${nn(decodeS + prefillS, 2)}s`,
@@ -366,6 +372,7 @@ const tui: TuiPlugin = async (api, options) => {
     vllmMlxBase: str(opts.vllmMlxBaseUrl, "VLLM_MLX_BASE_URL", "http://127.0.0.1:8000").replace(/\/+$/, ""),
     aphroditeBase: str(opts.aphroditeBaseUrl, "APHRODITE_BASE_URL", "http://127.0.0.1:2242").replace(/\/+$/, ""),
     lmdeployBase: str(opts.lmdeployBaseUrl, "LMDEPLOY_BASE_URL", "http://127.0.0.1:23333").replace(/\/+$/, ""),
+    llamafileBase: str(opts.llamafileBaseUrl, "LLAMAFILE_BASE_URL", "http://127.0.0.1:8003").replace(/\/+$/, ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -392,8 +399,11 @@ const tui: TuiPlugin = async (api, options) => {
   omlxSample(cfg).then((s) => {
     if (s) omlxPrev = s
   }).catch(() => {})
-  llamacppCounters(cfg).then((c) => {
-    if (c) llamacppPrev = c
+  llamacppCounters(cfg.llamacppBase).then((c) => {
+    if (c) llamacppPrev.set("llamacpp", c)
+  }).catch(() => {})
+  llamacppCounters(cfg.llamafileBase).then((c) => {
+    if (c) llamacppPrev.set("llamafile", c)
   }).catch(() => {})
 
   let lastKey = ""
@@ -409,7 +419,10 @@ const tui: TuiPlugin = async (api, options) => {
     let line: string | null = null
     if (provider === "mtplx") line = await mtplxLine(cfg, model)
     else if (provider === "omlx") line = await omlxLine(cfg)
-    else if (provider === "llamacpp") line = await llamacppLine(cfg, model)
+    else if (provider === "llamacpp") line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model)
+    // llamafile is llama.cpp-derived and publishes the identical metric names,
+    // so it reuses this adapter verbatim — only the URL and baseline differ.
+    else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model)
     else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t)
     else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t)
     else if (provider === "vllmmlx" || provider === "vllm-mlx")

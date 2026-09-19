@@ -36,6 +36,7 @@ get the universal layer.
 | `mtplx` | ✅ | ✅ per-turn | ✅ | ✅ | — | MTP speculative accept %, reasoning tokens | live |
 | `omlx` | ✅ (recovered, per-turn when 1 req/interval) | ❌ | ✅ (recovered) | ✅ | ✅ cached tokens | — | live |
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
+| `llamafile` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
 | `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
 | `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
@@ -138,6 +139,15 @@ Per-engine notes:
   falls back to the universal layer silently. The router (`llama serve`)
   exposes a different `/props` shape (`model_path: "none"`, a `role: "router"`
   field) that this adapter doesn't read; use `llama-server` directly.
+- **llamafile** — provider id `llamafile`, default port 8003. It is
+  llama.cpp-derived and publishes the *identical* `llamacpp:` metric names in
+  the same bare (unlabelled) format, so it reuses that adapter verbatim — only
+  the URL and its own counter baseline differ, which lets llama.cpp and
+  llamafile run side by side. The bare binary (`llamafile-<ver>-thin`, ~41MB)
+  loads an external GGUF, so no bundled-weights download is needed:
+  ```bash
+  llamafile -m model.gguf --server --host 127.0.0.1 --port 8003 --metrics
+  ```
 - **MLX-LM** (`mlx_lm.server`) — any provider id; it has no server-wide
   `/metrics` of its own, so universal layer only.
 - **vLLM** — provider id `vllm`, default port 8000. On a CUDA host, point
@@ -200,6 +210,7 @@ just falls back to the universal layer.
 | `vllmMlxBaseUrl` | `VLLM_MLX_BASE_URL` | `http://127.0.0.1:8000` |
 | `aphroditeBaseUrl` | `APHRODITE_BASE_URL` | `http://127.0.0.1:2242` |
 | `lmdeployBaseUrl` | `LMDEPLOY_BASE_URL` | `http://127.0.0.1:23333` |
+| `llamafileBaseUrl` | `LLAMAFILE_BASE_URL` | `http://127.0.0.1:8003` |
 
 ## Local development
 
@@ -233,8 +244,8 @@ npm test
   unconfirmed); **KoboldCpp** (`/api/extra/perf` carries a complete
   last-request set — `last_input_count`, `last_token_count`,
   `last_process_time`, `last_eval_time` — and runs on macOS arm64, so it could
-  be live-validated, but needs a ~700MB download); **llamafile**
-  (llama.cpp-derived, may work with the `llamacpp` adapter unchanged).
+  be live-validated, but needs a ~700MB download); (llamafile is done —
+  it did work with the `llamacpp` adapter unchanged.)
 - ~~**vllm-metal**~~ — done: confirmed the existing `vllm` adapter works
   against it unchanged, which moved the vLLM tier to live-validated.
 - A live vLLM/SGLang server to validate the enrichment tier against real
