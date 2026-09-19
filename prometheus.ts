@@ -19,6 +19,15 @@ export interface PromSpec {
    */
   durationSum?: string
   durationCount?: string
+  /**
+   * Separate prefill and decode time histograms, where an engine publishes
+   * them (LMDeploy). Better than duration-minus-TTFT: each phase is timed by
+   * the engine directly, so both rates are its own measurement.
+   */
+  prefillTimeSum?: string
+  prefillTimeCount?: string
+  decodeTimeSum?: string
+  decodeTimeCount?: string
 }
 
 export const VLLM_SPEC: PromSpec = {
@@ -69,6 +78,27 @@ export const VLLM_MLX_SPEC: PromSpec = {
   durationCount: "vllm_mlx_inference_request_duration_seconds_count",
 }
 
+/**
+ * LMDeploy publishes the richest surface of these engines: alongside the usual
+ * counters it times prefill and decode as separate histograms, so both rates
+ * are engine-measured rather than derived. Needs `--enable-metrics` (off by
+ * default); default port 23333. Names verified against
+ * lmdeploy/metrics/loggers.py.
+ */
+export const LMDEPLOY_SPEC: PromSpec = {
+  prefix: "lmdeploy:",
+  promptTokens: "lmdeploy:prompt_tokens_total",
+  generationTokens: "lmdeploy:generation_tokens_total",
+  ttftSum: "lmdeploy:time_to_first_token_seconds_sum",
+  ttftCount: "lmdeploy:time_to_first_token_seconds_count",
+  durationSum: "lmdeploy:e2e_request_latency_seconds_sum",
+  durationCount: "lmdeploy:e2e_request_latency_seconds_count",
+  prefillTimeSum: "lmdeploy:request_prefill_time_seconds_sum",
+  prefillTimeCount: "lmdeploy:request_prefill_time_seconds_count",
+  decodeTimeSum: "lmdeploy:request_decode_time_seconds_sum",
+  decodeTimeCount: "lmdeploy:request_decode_time_seconds_count",
+}
+
 export interface PromSample {
   prompt: number
   generation: number
@@ -77,6 +107,10 @@ export interface PromSample {
   ttftCount: number
   durationSum: number
   durationCount: number
+  prefillTimeSum: number
+  prefillTimeCount: number
+  decodeTimeSum: number
+  decodeTimeCount: number
 }
 
 /**
@@ -110,6 +144,10 @@ export function parsePromSample(text: string, spec: PromSpec): PromSample | null
     ttftCount: sumLabeledMetric(text, spec.ttftCount),
     durationSum: spec.durationSum ? sumLabeledMetric(text, spec.durationSum) : 0,
     durationCount: spec.durationCount ? sumLabeledMetric(text, spec.durationCount) : 0,
+    prefillTimeSum: spec.prefillTimeSum ? sumLabeledMetric(text, spec.prefillTimeSum) : 0,
+    prefillTimeCount: spec.prefillTimeCount ? sumLabeledMetric(text, spec.prefillTimeCount) : 0,
+    decodeTimeSum: spec.decodeTimeSum ? sumLabeledMetric(text, spec.decodeTimeSum) : 0,
+    decodeTimeCount: spec.decodeTimeCount ? sumLabeledMetric(text, spec.decodeTimeCount) : 0,
   }
 }
 
@@ -146,6 +184,11 @@ export interface PromDiff {
    * and exactly one request landed, so it describes this turn alone.
    */
   decodeTokS?: number
+  /**
+   * Prefill rate, when the engine times prefill as its own phase (LMDeploy).
+   * Nothing else here can produce this from Prometheus alone.
+   */
+  prefillTokS?: number
 }
 
 /**
@@ -163,21 +206,38 @@ export function diffPromSamples(prev: PromSample, now: PromSample): PromDiff | n
   const dDurCount = now.durationCount - prev.durationCount
   const durationS = dDurCount > 0 ? (now.durationSum - prev.durationSum) / dDurCount : undefined
 
-  // Exactly one request in the window makes both figures this turn's own.
+  // Exactly one request in the window makes these figures this turn's own.
   const exact = dTtftCount === 1
+  const promptTokens = now.prompt - prev.prompt
+
   let decodeTokS: number | undefined
-  if (exact && dDurCount === 1 && ttft !== undefined && durationS !== undefined) {
+  let prefillTokS: number | undefined
+
+  // Best case: the engine timed decode as its own phase (LMDeploy).
+  const dDecCount = now.decodeTimeCount - prev.decodeTimeCount
+  if (dDecCount === 1) {
+    const decodeS = now.decodeTimeSum - prev.decodeTimeSum
+    if (decodeS > 0) decodeTokS = completionTokens / decodeS
+  }
+  // Otherwise derive the decode window as duration minus TTFT (vllm-mlx).
+  if (decodeTokS === undefined && exact && dDurCount === 1 && ttft !== undefined && durationS !== undefined) {
     const decodeWindow = durationS - ttft
     if (decodeWindow > 0) decodeTokS = completionTokens / decodeWindow
+  }
+  const dPreCount = now.prefillTimeCount - prev.prefillTimeCount
+  if (dPreCount === 1 && promptTokens > 0) {
+    const prefillS = now.prefillTimeSum - prev.prefillTimeSum
+    if (prefillS > 0) prefillTokS = promptTokens / prefillS
   }
 
   return {
     completionTokens,
-    promptTokens: now.prompt - prev.prompt,
+    promptTokens,
     cachedTokens: now.cached - prev.cached,
     ttft,
     ttftExact: exact,
     durationS,
     decodeTokS,
+    prefillTokS,
   }
 }

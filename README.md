@@ -40,6 +40,7 @@ get the universal layer.
 | `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
 | `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
 | `aphrodite` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
+| `lmdeploy` | ✅ **engine-timed decode phase** | ✅ per-turn | ✅ **engine-timed prefill phase** | ✅ | — | — | **synthetic fixtures** (CUDA-only engine) |
 | anything else (Ollama, MLX-LM, LM Studio, …) | ✅ | ✅ per-turn | ❌ | ✅ | ❌ | — | live |
 
 Notes on what's *missing* and why, since that matters as much as what's shown:
@@ -63,7 +64,13 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   has no cache counter at all; its prompt-token count is silently *lower* on a
   cache hit, since the underlying counter only tracks what was actually
   computed.
-- **vllm-mlx is the only Prometheus engine here with a true decode rate.** It
+- **LMDeploy is the richest surface of any engine here.** It times prefill and
+  decode as separate histograms, so both rates are its own measurement rather
+  than derived — nothing else can produce a real prefill rate from Prometheus.
+  Its fixtures are **synthesized**, not captured: it needs CUDA. The metric
+  names and label shape are verified against its source
+  (`lmdeploy/metrics/loggers.py`), but no live server confirmed them.
+- **vllm-mlx is the only *live-validated* engine with a true decode rate.** It
   publishes both a TTFT *and* an end-to-end duration histogram, so when exactly
   one request lands in the window — which is the norm, since OpenCode issues one
   per turn — the deltas are that turn's own values, and decode rate comes out as
@@ -149,6 +156,8 @@ Per-engine notes:
   vllm-mlx serve mlx-community/Qwen2.5-0.5B-Instruct-4bit --port 8000 --enable-metrics
   ```
   Note it defaults to the same port as vLLM, so the two can't both run as-is.
+- **LMDeploy** — provider id `lmdeploy`, default port **23333**. Needs
+  `--enable-metrics` (off by default). CUDA host.
 - **Aphrodite** — provider id `aphrodite`, default port **2242** (a holdover
   from its KoboldAI origins). A vLLM fork, so its metrics are vLLM's under an
   `aphrodite:` prefix. Needs a CUDA host.
@@ -190,6 +199,7 @@ just falls back to the universal layer.
 | `sglangBaseUrl` | `SGLANG_BASE_URL` | `http://127.0.0.1:30000` |
 | `vllmMlxBaseUrl` | `VLLM_MLX_BASE_URL` | `http://127.0.0.1:8000` |
 | `aphroditeBaseUrl` | `APHRODITE_BASE_URL` | `http://127.0.0.1:2242` |
+| `lmdeployBaseUrl` | `LMDEPLOY_BASE_URL` | `http://127.0.0.1:23333` |
 
 ## Local development
 
@@ -218,10 +228,13 @@ npm test
   exists): **ExLlamaV3 / TabbyAPI** — despite third-party claims of a
   Prometheus endpoint, there is none in its source; **lightning-mlx** — no
   telemetry endpoint at all.
-- **Worth a look, not yet verified**: **LMDeploy** (real `/metrics` behind
-  `--enable-metrics`, port 23333, but exact field names unconfirmed) and
-  **Modular MAX serve** (rich `maxserve_*` metrics including TTFT and
-  inter-token latency, but Apple Silicon support unconfirmed).
+- **Worth a look, not yet built**: **Modular MAX serve** (rich `maxserve_*`
+  metrics including TTFT and inter-token latency, but Apple Silicon support
+  unconfirmed); **KoboldCpp** (`/api/extra/perf` carries a complete
+  last-request set — `last_input_count`, `last_token_count`,
+  `last_process_time`, `last_eval_time` — and runs on macOS arm64, so it could
+  be live-validated, but needs a ~700MB download); **llamafile**
+  (llama.cpp-derived, may work with the `llamacpp` adapter unchanged).
 - ~~**vllm-metal**~~ — done: confirmed the existing `vllm` adapter works
   against it unchanged, which moved the vLLM tier to live-validated.
 - A live vLLM/SGLang server to validate the enrichment tier against real

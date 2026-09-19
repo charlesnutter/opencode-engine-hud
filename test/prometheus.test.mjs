@@ -19,6 +19,7 @@ import {
   SGLANG_SPEC,
   APHRODITE_SPEC,
   VLLM_MLX_SPEC,
+  LMDEPLOY_SPEC,
 } from "../prometheus.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
@@ -213,6 +214,42 @@ test("vLLM (live via vllm-metal): diff matches the response's own usage", () => 
   assert.ok(Math.abs(diff.ttft - 1.008126974105835) < 1e-6, `ttft=${diff.ttft}`)
   // vLLM publishes no duration histogram, so no engine-measured decode rate.
   assert.equal(diff.decodeTokS, undefined)
+})
+
+// ---- LMDeploy: separate engine-timed prefill and decode phases ------------
+// SYNTHETIC fixtures (CUDA-only engine, cannot run here). Metric names and the
+// {model_name,engine} label shape are verified against
+// lmdeploy/metrics/loggers.py; values chosen to make the arithmetic checkable.
+test("LMDeploy: uses the engine's own prefill and decode timings", () => {
+  const before = parsePromSample(fixture("lmdeploy-before.prom"), LMDEPLOY_SPEC)
+  const now = parsePromSample(fixture("lmdeploy-after.prom"), LMDEPLOY_SPEC)
+  const diff = diffPromSamples(before, now)
+  assert.ok(diff)
+  assert.equal(diff.completionTokens, 200)
+  assert.equal(diff.promptTokens, 120)
+  assert.equal(diff.ttftExact, true)
+  assert.ok(Math.abs(diff.ttft - 0.25) < 1e-9, `ttft=${diff.ttft}`)
+  // decode: 200 tok over its own 2.0s decode histogram -> 100 tok/s.
+  // Not duration-minus-TTFT, which would give a different (worse) number.
+  assert.ok(Math.abs(diff.decodeTokS - 100) < 1e-6, `decodeTokS=${diff.decodeTokS}`)
+  // prefill: 120 tok over its own 0.2s prefill histogram -> 600 tok/s.
+  assert.ok(Math.abs(diff.prefillTokS - 600) < 1e-6, `prefillTokS=${diff.prefillTokS}`)
+})
+
+test("LMDeploy: engine-timed decode wins over the duration-minus-TTFT fallback", () => {
+  const before = parsePromSample(fixture("lmdeploy-before.prom"), LMDEPLOY_SPEC)
+  const now = parsePromSample(fixture("lmdeploy-after.prom"), LMDEPLOY_SPEC)
+  const diff = diffPromSamples(before, now)
+  // duration-minus-TTFT would be 200 / (2.5 - 0.25) = 88.9 tok/s; the engine's
+  // own decode timing gives 100. The richer source must be the one used.
+  assert.ok(Math.abs(diff.decodeTokS - 100) < 1e-6)
+  assert.ok(Math.abs(diff.decodeTokS - 200 / (2.5 - 0.25)) > 1, "must not be the fallback")
+})
+
+test("vLLM keeps no prefill rate (it times no prefill phase)", () => {
+  const before = parsePromSample(fixture("vllm-metal-before.prom"), VLLM_SPEC)
+  const now = parsePromSample(fixture("vllm-metal-after.prom"), VLLM_SPEC)
+  assert.equal(diffPromSamples(before, now).prefillTokS, undefined)
 })
 
 console.log(`\n${passed} passed`)

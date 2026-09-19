@@ -23,7 +23,7 @@
 import type { TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
-import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
+import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
 
 interface Config {
   mtplxUrl: string
@@ -34,6 +34,7 @@ interface Config {
   sglangBase: string
   vllmMlxBase: string
   aphroditeBase: string
+  lmdeployBase: string
 }
 
 const nn = (v: unknown, d = 1) =>
@@ -316,6 +317,7 @@ async function prometheusLine(
   return [
     `${label}  ${short(model)}`,
     decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s${ttftLabel}` : ttftLabel.trim(),
+    diff.prefillTokS !== undefined ? `prefill ${ni(diff.prefillTokS)} tok/s` : "",
     `${ni(diff.completionTokens)} tok  (${ni(diff.promptTokens)} prompt${diff.cachedTokens > 0 ? `, ${ni(diff.cachedTokens)} cached` : ""})${total !== undefined ? `  ${nn(total, 2)}s` : ""}`,
   ].filter(Boolean).join("\n")
 }
@@ -363,6 +365,7 @@ const tui: TuiPlugin = async (api, options) => {
     sglangBase: str(opts.sglangBaseUrl, "SGLANG_BASE_URL", "http://127.0.0.1:30000").replace(/\/+$/, ""),
     vllmMlxBase: str(opts.vllmMlxBaseUrl, "VLLM_MLX_BASE_URL", "http://127.0.0.1:8000").replace(/\/+$/, ""),
     aphroditeBase: str(opts.aphroditeBaseUrl, "APHRODITE_BASE_URL", "http://127.0.0.1:2242").replace(/\/+$/, ""),
+    lmdeployBase: str(opts.lmdeployBaseUrl, "LMDEPLOY_BASE_URL", "http://127.0.0.1:23333").replace(/\/+$/, ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -413,6 +416,8 @@ const tui: TuiPlugin = async (api, options) => {
       line = await prometheusLine("vllmmlx", VLLM_MLX_SPEC, cfg.vllmMlxBase, "vllm-mlx", model, info, t)
     else if (provider === "aphrodite")
       line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t)
+    else if (provider === "lmdeploy")
+      line = await prometheusLine("lmdeploy", LMDEPLOY_SPEC, cfg.lmdeployBase, "LMDeploy", model, info, t)
     if (!line) line = universalLine(provider, model, info, t)
     turns.delete(info.id)
     if (line) {
