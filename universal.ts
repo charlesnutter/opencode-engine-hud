@@ -32,6 +32,31 @@ async function getJson(url: string, headers?: Record<string, string>): Promise<a
   }
 }
 
+/**
+ * The one place token counts are rendered, so every tier reads the same:
+ * `1247 tok (889 think)` — topline is everything the model decoded, with the
+ * thinking portion named as a SUBSET of it. Deliberately not `(+889 think)`,
+ * which reads as an addition and invites summing 1247 + 889.
+ *
+ * `total` must already include `reasoning`. Sources differ on this and the
+ * difference is invisible in the numbers, so each caller has to know which it
+ * holds:
+ *   - OpenCode's `tokens.output` EXCLUDES reasoning. Measured on a Splash
+ *     Qwen3.8-27B turn: output 358 + reasoning 889 == the engine's own
+ *     `output 1,247`. Callers must pass `output + reasoning`.
+ *   - MTPLX's `usage.completion_tokens` INCLUDES it, per the OpenAI
+ *     convention where `completion_tokens_details.reasoning_tokens` is a
+ *     subset. Confirmed against four captured receipts: treating it as
+ *     exclusive implies 0.54 visible chars/token, which is impossible.
+ *   - Engine counters (llama.cpp `tokens_predicted_total`, Prometheus
+ *     `generation_tokens_total`, KoboldCpp `last_token_count`, oMLX
+ *     `total_completion_tokens`) count every decoded token and expose no
+ *     reasoning split, so they pass 0 and no think figure is shown.
+ */
+export function tokensLabel(total: number, reasoning: number): string {
+  return `${ni(total)} tok${reasoning > 0 ? ` (${ni(reasoning)} think)` : ""}`
+}
+
 // ---- Tier 1: universal, from OpenCode's own per-turn events -----------------
 export interface Turn {
   startAt?: number // request start (message.time.created), for TTFT
@@ -75,20 +100,18 @@ export function universalLine(provider: string, model: string, info: any, turn?:
   // VISIBLE output by that window understates the rate by however much of the
   // turn was spent thinking. Measured against Splash (Qwen3.8-27B): 889 of
   // 1247 generated tokens were reasoning, and this line reported 11.4 tok/s
-  // where the engine's own log said 39.7 over the same 31.4s window. The
-  // visible/think split stays in the totals line below; only the rate's
-  // numerator is corrected.
+  // where the engine's own log said 39.7 over the same 31.4s window.
   const generated = out + reason
   const { decodeTokS, ttft, total } = turnRate(generated, info, turn)
 
-  const think = reason > 0 ? ` (+${ni(reason)} think)` : ""
   const rate =
     decodeTokS !== undefined
       ? `${nn(decodeTokS)} tok/s${ttft !== undefined ? `  ttft ${nn(ttft, 2)}s` : ""}`
       : ttft !== undefined
         ? `ttft ${nn(ttft, 2)}s`
         : ""
-  const totals = `${ni(out)} tok${think}${total !== undefined ? `  ${nn(total, 2)}s` : ""}`
+  // OpenCode's output count excludes reasoning, so the topline adds them back.
+  const totals = `${tokensLabel(generated, reason)}${total !== undefined ? `  ${nn(total, 2)}s` : ""}`
   return [`${provider}  ${short(model)}`, rate, totals].filter(Boolean).join("\n")
 }
 

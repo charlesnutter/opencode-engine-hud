@@ -49,11 +49,14 @@ test("universalLine reports the engine's rate, not the visible-only one", () => 
   assert.ok(!line.includes("11.4 tok/s"), `must not report the understated rate:\n${line}`)
 })
 
-test("universalLine still shows the visible/think split in the totals", () => {
+test("the totals line is the topline total with thinking as a subset", () => {
   const line = universalLine("splash", "incoai/Qwen3.8-27B-Splash", splashInfo, splashTurn)
-  // The breakdown is what makes the corrected rate legible — keep both.
-  assert.ok(line.includes("358 tok"), line)
-  assert.ok(line.includes("(+889 think)"), line)
+  // Topline is everything decoded, matching the engine's own `output 1,247`.
+  assert.ok(line.includes("1247 tok (889 think)"), line)
+  // Never the additive form: `(+889 think)` invites summing to 2136.
+  assert.ok(!line.includes("(+"), line)
+  // And never the old visible-only topline.
+  assert.ok(!line.includes("358 tok"), line)
   assert.ok(line.includes("ttft 0.66s"), line)
 })
 

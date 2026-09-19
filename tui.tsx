@@ -24,7 +24,8 @@ import type { TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { fetchKoboldPerf, koboldTurn } from "./koboldcpp"
-import { Turn, turnRate, universalLine, short, nn, ni } from "./universal"
+import { fetchSplashSample, diffSplashSamples, SplashSample } from "./splash"
+import { Turn, turnRate, universalLine, tokensLabel, short, nn, ni } from "./universal"
 import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
 
 interface Config {
@@ -39,6 +40,7 @@ interface Config {
   lmdeployBase: string
   llamafileBase: string
   koboldBase: string
+  splashBase: string
 }
 
 // ---- Tier 2: MTPLX enrichment — /metrics `latest`, per-request precise ------
@@ -54,13 +56,14 @@ async function mtplxLine(cfg: Config, model: string): Promise<string | null> {
       : null
     mtp = `MTP ${nn(perPass, 2)}x${acc ? ` ${acc}%` : ""}`
   }
-  const think =
-    typeof l.reasoning_tokens === "number" && l.reasoning_tokens > 0 ? ` (+${ni(l.reasoning_tokens)} think)` : ""
+  // MTPLX follows the OpenAI convention: completion_tokens already INCLUDES
+  // reasoning_tokens, so it is the topline as-is (see tokensLabel).
+  const reasoning = typeof l.reasoning_tokens === "number" ? l.reasoning_tokens : 0
   return [
     `MTPLX  ${short(model)}`,
     `${nn(l.decode_tok_s)} tok/s  ttft ${nn(l.ttft_s, 2)}s`,
     `prefill ${ni(l.prefill_tok_s)} tok/s`,
-    `${ni(l.completion_tokens)} tok${think}  ${nn(l.request_elapsed_s, 2)}s`,
+    `${tokensLabel(l.completion_tokens, reasoning)}  ${nn(l.request_elapsed_s, 2)}s`,
     mtp,
   ].filter(Boolean).join("\n")
 }
@@ -207,6 +210,35 @@ async function llamacppLine(
   ].filter(Boolean).join("\n")
 }
 
+// ---- Tier 2: Splash enrichment — /metrics, both phases engine-timed -------
+// The fullest line this plugin draws: Splash counts tokens AND wall time for
+// prefill and decode separately, so both rates are differenced straight from
+// its own measurements, and it counts prefix-cache reuse and speculative
+// drafting besides. Validated live against Splash 1.0 on Apple Silicon.
+const splashPrev = new Map<string, SplashSample>()
+
+async function splashLine(base: string, model: string): Promise<string | null> {
+  const now = await fetchSplashSample(base)
+  if (!now) return null // unreachable, or not a Splash server
+  const prev = splashPrev.get(base)
+  splashPrev.set(base, now)
+  if (!prev) return null // no baseline yet (first turn since launch)
+  const t = diffSplashSamples(prev, now)
+  if (!t) return null
+
+  // promptTokens is what was recomputed; cached is what the prefix cache
+  // served. Showing both is the honest reading of a Splash prefill rate.
+  const prompt = t.promptTokens + t.cachedTokens
+  return [
+    `Splash  ${short(model)}`,
+    t.decodeTokS !== undefined ? `${nn(t.decodeTokS)} tok/s` : "",
+    t.prefillTokS !== undefined ? `prefill ${ni(t.prefillTokS)} tok/s` : "",
+    `${ni(t.completionTokens)} tok  ${nn(t.prefillS + t.decodeS, 2)}s`,
+    `${ni(prompt)} prompt${t.cachedTokens > 0 ? `, ${ni(t.cachedTokens)} cached` : ""}`,
+    t.draftAcceptRate !== undefined ? `draft ${ni(t.draftAcceptRate * 100)}% accepted` : "",
+  ].filter(Boolean).join("\n")
+}
+
 // ---- Tier 2: KoboldCpp enrichment — /api/extra/perf, last-request ---------
 // Unlike every Prometheus engine here, this one hands over the previous
 // request already reduced, with prefill and decode timed separately, so there
@@ -330,6 +362,7 @@ const tui: TuiPlugin = async (api, options) => {
     lmdeployBase: str(opts.lmdeployBaseUrl, "LMDEPLOY_BASE_URL", "http://127.0.0.1:23333").replace(/\/+$/, ""),
     llamafileBase: str(opts.llamafileBaseUrl, "LLAMAFILE_BASE_URL", "http://127.0.0.1:8003").replace(/\/+$/, ""),
     koboldBase: str(opts.koboldcppBaseUrl, "KOBOLDCPP_BASE_URL", "http://127.0.0.1:5001").replace(/\/+$/, ""),
+    splashBase: str(opts.splashBaseUrl, "SPLASH_BASE_URL", "http://127.0.0.1:8000").replace(/\/+$/, ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -380,6 +413,7 @@ const tui: TuiPlugin = async (api, options) => {
     // llamafile is llama.cpp-derived and publishes the identical metric names,
     // so it reuses this adapter verbatim — only the URL and baseline differ.
     else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model)
+    else if (provider === "splash") line = await splashLine(cfg.splashBase, model)
     else if (provider === "koboldcpp" || provider === "kobold")
       line = await koboldLine(cfg.koboldBase, model)
     else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t)

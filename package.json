@@ -50,11 +50,12 @@
     "prometheus.ts",
     "koboldcpp.ts",
     "universal.ts",
+    "splash.ts",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/universal.test.mjs"
+    "test": "bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/universal.test.mjs && bun test/splash.test.mjs"
   }
 }

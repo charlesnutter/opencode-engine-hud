@@ -37,6 +37,7 @@ get the universal layer.
 | `omlx` | ✅ (recovered, per-turn when 1 req/interval) | ❌ | ✅ (recovered) | ✅ | ✅ cached tokens | — | live |
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `llamafile` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
+| `splash` | ✅ **engine-timed decode phase** | ❌ (universal TTFT still shows) | ✅ **engine-timed prefill phase**, over recomputed tokens only | ✅ | ✅ cached tokens | speculative-draft accept % | **live** |
 | `koboldcpp` | ✅ **engine-timed decode phase** | ❌ (universal TTFT still shows) | ✅ **engine-timed prefill phase**, when the prompt is big enough to time | ✅ | — | speculative-draft accept % (with a draft model) | **live** |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
 | `sglang` | ✅ **engine-measured** on streaming turns, excludes prefill | ✅ per-turn when one request lands, else window average | ❌ | ✅ | ✅ cached tokens | — | **live** (via its MLX backend on Apple Silicon) |
@@ -86,6 +87,15 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   an MLX/Metal compute backend, so its `/metrics` *is* vLLM's. Every field name
   in our spec was confirmed against a live instance, with deltas cross-checked
   against the response's own `usage`.
+- **Splash draws the fullest line of any engine here.** It publishes
+  cumulative token *and* wall-time counters for prefill and decode separately,
+  so both rates are differenced straight from its own measurements, plus
+  prefix-cache reuse and speculative-draft acceptance. Its prefill rate is also
+  the only trustworthy one on a cache hit: `splash_prefill_input_tokens_total`
+  counts only tokens actually recomputed, with the reused ones in
+  `splash_cache_reused_tokens_total` — the two sum to the response's
+  `prompt_tokens`. Compare KoboldCpp below, which divides the *whole* prompt by
+  the uncached time and so overstates.
 - **KoboldCpp is the only engine here that needs no arithmetic from us.**
   `/api/extra/perf` reports the previous request already reduced, with prefill
   and decode timed as separate phases, so both rates are the engine's own
@@ -184,6 +194,10 @@ Per-engine notes:
   [vllm-metal](https://github.com/vllm-project/vllm-metal)
   (`brew tap vllm-project/vllm-metal …`) and `vllm serve <model>` works
   normally — it's upstream vLLM, so this adapter needs no changes.
+- **Splash** — provider id `splash`, default port 8000. Nothing to enable:
+  `/metrics` is always on. `splash serve --model <owner/repo>`, then
+  `splash opencode` wires it up. It is Apple Silicon only and ships one
+  packaged model per repo.
 - **KoboldCpp** — provider id `koboldcpp` (or `kobold`), default port 5001.
   Nothing to enable: `/api/extra/perf` is always on. Point OpenCode at its
   OpenAI-compatible `/v1/` endpoint. On Apple Silicon grab the
@@ -247,6 +261,7 @@ just falls back to the universal layer.
 | `llamacppBaseUrl` | `LLAMACPP_BASE_URL` | `http://127.0.0.1:8080` |
 | `vllmBaseUrl` | `VLLM_BASE_URL` | `http://127.0.0.1:8000` |
 | `sglangBaseUrl` | `SGLANG_BASE_URL` | `http://127.0.0.1:30000` |
+| `splashBaseUrl` | `SPLASH_BASE_URL` | `http://127.0.0.1:8000` |
 | `koboldcppBaseUrl` | `KOBOLDCPP_BASE_URL` | `http://127.0.0.1:5001` |
 | `vllmMlxBaseUrl` | `VLLM_MLX_BASE_URL` | `http://127.0.0.1:8000` |
 | `aphroditeBaseUrl` | `APHRODITE_BASE_URL` | `http://127.0.0.1:2242` |
