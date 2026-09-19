@@ -37,6 +37,7 @@ get the universal layer.
 | `omlx` | ✅ (recovered, per-turn when 1 req/interval) | ❌ | ✅ (recovered) | ✅ | ✅ cached tokens | — | live |
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `llamafile` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
+| `mlxserve` | ✅ **engine-measured**, excludes prefill (streamed turns) | ✅ **real per-request TTFT** (streamed turns) | ❌ | ✅ (prompt only on non-streamed) | — | cold-start flag | **live** |
 | `splash` | ✅ **engine-timed decode phase** | ❌ (universal TTFT still shows) | ✅ **engine-timed prefill phase**, over recomputed tokens only | ✅ | ✅ cached tokens | speculative-draft accept % | **live** |
 | `koboldcpp` | ✅ **engine-timed decode phase** | ❌ (universal TTFT still shows) | ✅ **engine-timed prefill phase**, when the prompt is big enough to time | ✅ | — | speculative-draft accept % (with a draft model) | **live** |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
@@ -92,6 +93,16 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   one wrinkle: an OpenCode turn that calls tools issues a request per round
   trip, and those all land inside one window — the Splash line then says
   `N requests this turn` so its sums are not misread as a single reply.
+- **mlx-serve is the only engine whose freshness check is exact.** Its
+  `/v1/metrics/requests` returns a keyed history of recent requests, so a turn
+  is matched by `request_id` rather than inferred from a counter delta. Three
+  things the live server taught us, none documented: `/metrics/requests`
+  without the `/v1` prefix is a 404 even though `/metrics` resolves; on a
+  **non-streamed** request `ttft_ms` comes back equal to `total_duration_ms`
+  and `tokens_per_second` is a whole-request rate, so neither is offered as a
+  decode figure; and a streamed request reports **no prompt count** at all.
+  Cold starts are flagged, because a turn that loads the model runs ~10x longer
+  (4.8s against 0.46s warm) and would otherwise read as a collapse.
 - **Splash draws the fullest line of any engine here.** It publishes
   cumulative token *and* wall-time counters for prefill and decode separately,
   so both rates are differenced straight from its own measurements, plus
@@ -199,6 +210,12 @@ Per-engine notes:
   [vllm-metal](https://github.com/vllm-project/vllm-metal)
   (`brew tap vllm-project/vllm-metal …`) and `vllm serve <model>` works
   normally — it's upstream vLLM, so this adapter needs no changes.
+- **mlx-serve** — provider id `mlxserve` (or `mlx-serve`), default port 8095.
+  Nothing to enable. This is [raspoli/mlx-serve](https://github.com/raspoli/mlx-serve),
+  an Apple Silicon manager that hot-swaps MLX models and wraps `mlx_lm.server`
+  with the observability that server lacks — **not** `mlx_lm.server` itself,
+  which still gets the universal line only. Set `mlxServeApiKey` if the server
+  runs with `MLX_API_KEY`.
 - **Splash** — provider id `splash`, default port 8000. Nothing to enable:
   `/metrics` is always on. `splash serve --model <owner/repo>`, then
   `splash opencode` wires it up. It is Apple Silicon only and ships one
@@ -266,6 +283,8 @@ just falls back to the universal layer.
 | `llamacppBaseUrl` | `LLAMACPP_BASE_URL` | `http://127.0.0.1:8080` |
 | `vllmBaseUrl` | `VLLM_BASE_URL` | `http://127.0.0.1:8000` |
 | `sglangBaseUrl` | `SGLANG_BASE_URL` | `http://127.0.0.1:30000` |
+| `mlxServeBaseUrl` | `MLXSERVE_BASE_URL` | `http://127.0.0.1:8095` |
+| `mlxServeApiKey` | `MLX_API_KEY` | *(unset)* |
 | `splashBaseUrl` | `SPLASH_BASE_URL` | `http://127.0.0.1:8000` |
 | `koboldcppBaseUrl` | `KOBOLDCPP_BASE_URL` | `http://127.0.0.1:5001` |
 | `vllmMlxBaseUrl` | `VLLM_MLX_BASE_URL` | `http://127.0.0.1:8000` |

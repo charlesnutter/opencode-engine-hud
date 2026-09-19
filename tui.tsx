@@ -25,6 +25,7 @@ import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { fetchKoboldPerf, koboldTurn } from "./koboldcpp"
 import { fetchSplashSample, diffSplashSamples, SplashSample } from "./splash"
+import { fetchMlxServeRequests, mlxServeTurn } from "./mlxserve"
 import { Turn, turnRate, universalLine, tokensLabel, short, nn, ni } from "./universal"
 import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
 
@@ -41,6 +42,8 @@ interface Config {
   llamafileBase: string
   koboldBase: string
   splashBase: string
+  mlxServeBase: string
+  mlxServeKey: string
 }
 
 // ---- Tier 2: MTPLX enrichment — /metrics `latest`, per-request precise ------
@@ -210,6 +213,39 @@ async function llamacppLine(
   ].filter(Boolean).join("\n")
 }
 
+// ---- Tier 2: mlx-serve enrichment — /v1/metrics/requests, id-keyed --------
+// Alone among these engines, mlx-serve keeps a history of recent requests each
+// carrying its own id, so "is this our turn?" is answered by identity rather
+// than by a counter delta. Note the /v1 prefix: /metrics/requests without it
+// is a 404 even though /metrics itself resolves. Validated live against
+// mlx-serve 0.1.0 on Apple Silicon.
+const mlxServePrevId = new Map<string, string>()
+
+async function mlxServeLine(cfg: Config, model: string): Promise<string | null> {
+  const recs = await fetchMlxServeRequests(cfg.mlxServeBase, model, cfg.mlxServeKey || undefined)
+  if (!recs) return null // unreachable, not mlx-serve, or the API key is wrong
+  const t = mlxServeTurn(recs, mlxServePrevId.get(cfg.mlxServeBase))
+  if (!t) return null // nothing newer than the record already reported
+  mlxServePrevId.set(cfg.mlxServeBase, t.requestId)
+
+  // decodeTokS and overallTokS are never both set; they are not comparable, so
+  // the whole-request one is labelled rather than shown as a decode rate.
+  const rate =
+    t.decodeTokS !== undefined
+      ? `${nn(t.decodeTokS)} tok/s${t.ttft !== undefined ? `  ttft ${nn(t.ttft, 2)}s` : ""}`
+      : t.overallTokS !== undefined
+        ? `${nn(t.overallTokS)} tok/s (whole request)`
+        : ""
+  return [
+    `mlx-serve  ${short(model)}`,
+    rate,
+    `${ni(t.completionTokens)} tok${t.promptTokens !== undefined ? `  ${ni(t.promptTokens)} prompt` : ""}  ${nn(t.totalS, 2)}s`,
+    // A cold start loaded the model mid-request; without this the turn reads
+    // as a tenfold slowdown rather than a one-off load.
+    t.coldStart ? "cold start (model loaded)" : "",
+  ].filter(Boolean).join("\n")
+}
+
 // ---- Tier 2: Splash enrichment — /metrics, both phases engine-timed -------
 // The fullest line this plugin draws: Splash counts tokens AND wall time for
 // prefill and decode separately, so both rates are differenced straight from
@@ -366,6 +402,8 @@ const tui: TuiPlugin = async (api, options) => {
     llamafileBase: str(opts.llamafileBaseUrl, "LLAMAFILE_BASE_URL", "http://127.0.0.1:8003").replace(/\/+$/, ""),
     koboldBase: str(opts.koboldcppBaseUrl, "KOBOLDCPP_BASE_URL", "http://127.0.0.1:5001").replace(/\/+$/, ""),
     splashBase: str(opts.splashBaseUrl, "SPLASH_BASE_URL", "http://127.0.0.1:8000").replace(/\/+$/, ""),
+    mlxServeBase: str(opts.mlxServeBaseUrl, "MLXSERVE_BASE_URL", "http://127.0.0.1:8095").replace(/\/+$/, ""),
+    mlxServeKey: str(opts.mlxServeApiKey, "MLX_API_KEY", ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -417,6 +455,8 @@ const tui: TuiPlugin = async (api, options) => {
     // so it reuses this adapter verbatim — only the URL and baseline differ.
     else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model)
     else if (provider === "splash") line = await splashLine(cfg.splashBase, model)
+    else if (provider === "mlxserve" || provider === "mlx-serve")
+      line = await mlxServeLine(cfg, model)
     else if (provider === "koboldcpp" || provider === "kobold")
       line = await koboldLine(cfg.koboldBase, model)
     else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t)
