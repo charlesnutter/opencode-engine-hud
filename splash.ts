@@ -78,6 +78,17 @@ export interface SplashTurn {
   cachedTokens: number
   /** Share of speculative draft tokens the target model accepted. */
   draftAcceptRate?: number
+  /**
+   * Requests Splash completed in this window — normally 1, so every figure
+   * here describes that one request.
+   *
+   * It is not always 1: an OpenCode turn that calls tools issues a request per
+   * round trip, and all of them land between two samples. The figures are then
+   * sums over the turn (and the rates are its aggregate rates), which is still
+   * this turn and never the session, but is worth showing so a large token
+   * count is not misread as one enormous reply.
+   */
+  requests: number
 }
 
 export function parseSplashSample(text: string): SplashSample | null {
@@ -128,6 +139,7 @@ export function diffSplashSamples(prev: SplashSample, now: SplashSample): Splash
   const draftAcceptRate = drafted > 0 ? accepted / drafted : undefined
 
   return {
+    requests: now.requestsCompleted - prev.requestsCompleted,
     completionTokens,
     promptTokens,
     decodeTokS,

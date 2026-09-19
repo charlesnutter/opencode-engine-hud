@@ -79,6 +79,21 @@ test("Splash: a second identical prompt still reuses cache and reports a turn", 
   assert.equal(t.promptTokens + t.cachedTokens, USAGE.prompt_tokens)
 })
 
+test("Splash: a single-request turn is labelled as one request", () => {
+  const [b, a] = pair("splash")
+  assert.equal(diffSplashSamples(b, a).requests, 1)
+})
+
+test("Splash: a multi-request turn reports how many, so sums are not misread", () => {
+  // An OpenCode turn with tool calls lands several requests between samples.
+  const [b, a] = pair("splash")
+  const multi = { ...a, requestsCompleted: b.requestsCompleted + 3 }
+  const t = diffSplashSamples(b, multi)
+  assert.equal(t.requests, 3)
+  // Still this turn's window, never the session: the token deltas are unchanged.
+  assert.equal(t.completionTokens, diffSplashSamples(b, a).completionTokens)
+})
+
 // ---- guards -----------------------------------------------------------------
 test("Splash: no completed request in the window yields nothing", () => {
   const [, a] = pair("splash")

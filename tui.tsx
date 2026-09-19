@@ -236,6 +236,9 @@ async function splashLine(base: string, model: string): Promise<string | null> {
     `${ni(t.completionTokens)} tok  ${nn(t.prefillS + t.decodeS, 2)}s`,
     `${ni(prompt)} prompt${t.cachedTokens > 0 ? `, ${ni(t.cachedTokens)} cached` : ""}`,
     t.draftAcceptRate !== undefined ? `draft ${ni(t.draftAcceptRate * 100)}% accepted` : "",
+    // Only when a turn spanned several requests (tool round trips), so the
+    // figures above read as sums rather than as one reply.
+    t.requests > 1 ? `${ni(t.requests)} requests this turn` : "",
   ].filter(Boolean).join("\n")
 }
 

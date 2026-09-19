@@ -87,6 +87,11 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   an MLX/Metal compute backend, so its `/metrics` *is* vLLM's. Every field name
   in our spec was confirmed against a live instance, with deltas cross-checked
   against the response's own `usage`.
+- **Every figure is one turn, never a running total.** Each adapter samples at
+  turn boundaries and subtracts, so nothing accumulates across a session. The
+  one wrinkle: an OpenCode turn that calls tools issues a request per round
+  trip, and those all land inside one window — the Splash line then says
+  `N requests this turn` so its sums are not misread as a single reply.
 - **Splash draws the fullest line of any engine here.** It publishes
   cumulative token *and* wall-time counters for prefill and decode separately,
   so both rates are differenced straight from its own measurements, plus
