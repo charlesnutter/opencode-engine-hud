@@ -17,11 +17,24 @@ zeroes cleanly rather than carrying a stale reading.
 
 ## Engines
 
-| Provider | Source | What you get |
-|---|---|---|
-| **MTPLX** (`mtplx`) | `/metrics` `latest` receipt | Per-request precise: decode tok/s, TTFT, prefill, MTP speculative acceptance |
-| **oMLX** (`omlx`) | `/api/status`, differenced across the turn | Exact tokens + per-request rates (recovered from the running average). Poll, atomic-at-completion: **no live ticker, no TTFT** |
-| others | — | Provider name + a dash (no adapter yet) |
+Every provider gets the **universal layer** for free — tok/s, TTFT, and exact
+tokens, read from OpenCode's own per-turn events (`message.part.delta` +
+`message.updated`). No engine endpoint needed, so Ollama, MLX-LM and any other
+OpenAI-compatible server all work out of the box. Some engines get richer
+**enrichment** on top, from their own server-side telemetry:
+
+| Provider | Source | What you get | Validated |
+|---|---|---|---|
+| **MTPLX** (`mtplx`) | `/metrics` `latest` receipt | Per-request precise: decode tok/s, TTFT, prefill, MTP speculative acceptance | live |
+| **oMLX** (`omlx`) | `/api/status`, differenced across the turn | Exact tokens + per-request rates. Poll, atomic-at-completion: no live ticker, no TTFT | live |
+| **llama.cpp** (`llamacpp`) | `/metrics`, differenced across the turn | Exact tokens, decode tok/s, prefill tok/s. Needs `--metrics` (off by default) | live |
+| **vLLM** (`vllm`) | Prometheus `/metrics`, differenced across the turn | Exact tokens (prompt/generation/cached), TTFT histogram average. Decode rate from OpenCode's own turn timing | fixtures only (CUDA-only engine) |
+| **SGLang** (`sglang`) | Prometheus `/metrics`, differenced across the turn | Same as vLLM | fixtures only (CUDA-only engine) |
+| others (Ollama, MLX-LM, LM Studio, …) | — | Universal layer only | live |
+
+vLLM and SGLang can't run on Apple Silicon, so that tier is validated against
+real captured `/metrics` text (`fixtures/`, `test/prometheus.test.mjs`) rather
+than a live server. Run it with `npm test`.
 
 ## Install
 

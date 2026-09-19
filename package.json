@@ -3,18 +3,39 @@
   "name": "@charlesnutter/opencode-hud",
   "version": "0.1.0",
   "description": "Live local-inference stats (MTPLX, oMLX) pinned to the OpenCode sidebar.",
-  "keywords": ["opencode", "opencode-plugin", "tui", "hud", "mtplx", "omlx", "mlx", "tokens-per-second", "ttft"],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "hud",
+    "mtplx",
+    "omlx",
+    "mlx",
+    "tokens-per-second",
+    "ttft"
+  ],
   "license": "MIT",
   "author": "charlesnutter",
-  "repository": { "type": "git", "url": "git+https://github.com/charlesnutter/opencode-hud.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/charlesnutter/opencode-hud.git"
+  },
   "homepage": "https://github.com/charlesnutter/opencode-hud#readme",
-  "bugs": { "url": "https://github.com/charlesnutter/opencode-hud/issues" },
+  "bugs": {
+    "url": "https://github.com/charlesnutter/opencode-hud/issues"
+  },
   "type": "module",
   "exports": {
-    ".": { "import": "./tui.tsx" },
-    "./tui": { "import": "./tui.tsx" }
+    ".": {
+      "import": "./tui.tsx"
+    },
+    "./tui": {
+      "import": "./tui.tsx"
+    }
   },
-  "engines": { "opencode": ">=1.18.20" },
+  "engines": {
+    "opencode": ">=1.18.20"
+  },
   "dependencies": {
     "@opentui/core": "^0.4.5",
     "@opentui/solid": "^0.4.5",
@@ -24,8 +45,13 @@
     "@opencode-ai/plugin": ">=1.18.20",
     "typescript": "^5.6.0"
   },
-  "files": ["tui.tsx", "README.md", "LICENSE"],
+  "files": [
+    "tui.tsx",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test/prometheus.test.mjs"
   }
 }

@@ -23,12 +23,15 @@
 import type { TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
+import { PromSpec, VLLM_SPEC, SGLANG_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
 
 interface Config {
   mtplxUrl: string
   omlxBase: string
   omlxKey: string
   llamacppBase: string
+  vllmBase: string
+  sglangBase: string
 }
 
 const nn = (v: unknown, d = 1) =>
@@ -63,9 +66,16 @@ interface Turn {
   bytes: number // streamed bytes, for an estimate when usage is absent
 }
 
-function universalLine(provider: string, model: string, info: any, turn?: Turn): string {
-  const out: number = info?.tokens?.output ?? 0
-  const reason: number = info?.tokens?.reasoning ?? 0
+/**
+ * Decode rate, TTFT and total time from OpenCode's own per-turn timing —
+ * `time.created`/`time.completed` on the message, and the streaming-delta
+ * marks in `turn`. Shared by the universal line and by enrichment tiers that
+ * have exact token counts but no per-request timing of their own (vLLM,
+ * SGLang): their Prometheus counters need continuous polling to split decode
+ * from prefill, which nothing here does, but OpenCode's own event stream
+ * already has it for free.
+ */
+function turnRate(tokens: number, info: any, turn?: Turn): { decodeTokS?: number; ttft?: number; total?: number } {
   const created = info?.time?.created
   const completed = info?.time?.completed
   const total = typeof created === "number" && typeof completed === "number" ? (completed - created) / 1000 : undefined
@@ -74,12 +84,19 @@ function universalLine(provider: string, model: string, info: any, turn?: Turn):
   let decodeTokS: number | undefined
   if (turn) {
     if (turn.firstAt && turn.startAt) ttft = (turn.firstAt - turn.startAt) / 1000
-    if (turn.firstAt && turn.lastAt && turn.lastAt > turn.firstAt && out > 0) {
-      decodeTokS = out / ((turn.lastAt - turn.firstAt) / 1000)
+    if (turn.firstAt && turn.lastAt && turn.lastAt > turn.firstAt && tokens > 0) {
+      decodeTokS = tokens / ((turn.lastAt - turn.firstAt) / 1000)
     }
   }
   // Fall back to whole-request rate if the stream window was too short to time.
-  if (decodeTokS === undefined && out > 0 && total && total > 0) decodeTokS = out / total
+  if (decodeTokS === undefined && tokens > 0 && total && total > 0) decodeTokS = tokens / total
+  return { decodeTokS, ttft, total }
+}
+
+function universalLine(provider: string, model: string, info: any, turn?: Turn): string {
+  const out: number = info?.tokens?.output ?? 0
+  const reason: number = info?.tokens?.reasoning ?? 0
+  const { decodeTokS, ttft, total } = turnRate(out, info, turn)
 
   const think = reason > 0 ? ` (+${ni(reason)} think)` : ""
   const rate =
@@ -253,6 +270,49 @@ async function llamacppLine(cfg: Config, model: string): Promise<string | null> 
   ].filter(Boolean).join("\n")
 }
 
+// ---- Tier 2: vLLM / SGLang enrichment — Prometheus, diffed across the turn -
+// Both publish cumulative counters that, unlike llama.cpp/oMLX, advance DURING
+// generation rather than only at completion. That only matters for a
+// continuous poller, which this plugin does not run — the turn-boundary diff
+// (prometheus.ts) still gives exact prompt/generation/cached token counts and
+// the TTFT histogram's per-window average, none of which the universal layer
+// can see at all. Decode rate and total time reuse OpenCode's own turn timing
+// (`turnRate`, shared with the universal line): Prometheus alone needs
+// mid-request polling to split decode from prefill, and OpenCode's streaming
+// events already have that split for free.
+//
+// Not run against a live vLLM/SGLang server (both CUDA-only) — validated
+// against real captured /metrics text in test/prometheus.test.mjs instead.
+const promPrev = new Map<string, PromSample>() // keyed by provider id, not URL
+
+async function prometheusLine(
+  providerId: string,
+  spec: PromSpec,
+  base: string,
+  label: string,
+  model: string,
+  info: any,
+  turn?: Turn
+): Promise<string | null> {
+  const now = await fetchPromSample(base, spec)
+  if (!now) return null
+  const prev = promPrev.get(providerId)
+  promPrev.set(providerId, now)
+  if (!prev) return null // no baseline yet (first turn since launch)
+
+  const diff = diffPromSamples(prev, now)
+  if (!diff) return null
+
+  const { decodeTokS, total } = turnRate(diff.completionTokens, info, turn)
+  return [
+    `${label}  ${short(model)}`,
+    decodeTokS !== undefined
+      ? `${nn(decodeTokS)} tok/s${diff.ttftAvg !== undefined ? `  ttft ${nn(diff.ttftAvg, 2)}s (avg)` : ""}`
+      : "",
+    `${ni(diff.completionTokens)} tok  (${ni(diff.promptTokens)} prompt${diff.cachedTokens > 0 ? `, ${ni(diff.cachedTokens)} cached` : ""})${total !== undefined ? `  ${nn(total, 2)}s` : ""}`,
+  ].filter(Boolean).join("\n")
+}
+
 interface Store { text: string; listeners: Set<() => void> }
 
 function SidebarFooter(props: { api: Parameters<TuiPlugin>[0]; store: Store }) {
@@ -292,6 +352,8 @@ const tui: TuiPlugin = async (api, options) => {
     omlxBase: str(opts.omlxBaseUrl, "OMLX_BASE_URL", "http://127.0.0.1:8099").replace(/\/+$/, ""),
     omlxKey: str(opts.omlxApiKey, "OMLX_API_KEY", ""),
     llamacppBase: str(opts.llamacppBaseUrl, "LLAMACPP_BASE_URL", "http://127.0.0.1:8080").replace(/\/+$/, ""),
+    vllmBase: str(opts.vllmBaseUrl, "VLLM_BASE_URL", "http://127.0.0.1:8000").replace(/\/+$/, ""),
+    sglangBase: str(opts.sglangBaseUrl, "SGLANG_BASE_URL", "http://127.0.0.1:30000").replace(/\/+$/, ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -336,6 +398,8 @@ const tui: TuiPlugin = async (api, options) => {
     if (provider === "mtplx") line = await mtplxLine(cfg, model)
     else if (provider === "omlx") line = await omlxLine(cfg)
     else if (provider === "llamacpp") line = await llamacppLine(cfg, model)
+    else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t)
+    else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t)
     if (!line) line = universalLine(provider, model, info, t)
     turns.delete(info.id)
     if (line) {
