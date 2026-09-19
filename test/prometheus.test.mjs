@@ -195,6 +195,26 @@ test("cross-check: vLLM text does not parse against the vllm-mlx spec", () => {
   assert.equal(parsePromSample(fixture("vllm-idle.prom"), VLLM_MLX_SPEC), null)
 })
 
+// ---- vLLM: validated LIVE, via vllm-metal on Apple Silicon ---------------
+// vllm-metal runs upstream vLLM's own server with an MLX/Metal compute
+// backend, so its /metrics is vLLM's. These two captures bracket one real
+// generation whose response reported usage: { prompt_tokens: 35,
+// completion_tokens: 35 } — which is what makes this tier live-validated
+// rather than fixtures-only.
+test("vLLM (live via vllm-metal): diff matches the response's own usage", () => {
+  const before = parsePromSample(fixture("vllm-metal-before.prom"), VLLM_SPEC)
+  const now = parsePromSample(fixture("vllm-metal-after.prom"), VLLM_SPEC)
+  const diff = diffPromSamples(before, now)
+  assert.ok(diff)
+  assert.equal(diff.completionTokens, 35)
+  assert.equal(diff.promptTokens, 35)
+  // One request landed, so the TTFT delta is that request's own value.
+  assert.equal(diff.ttftExact, true)
+  assert.ok(Math.abs(diff.ttft - 1.008126974105835) < 1e-6, `ttft=${diff.ttft}`)
+  // vLLM publishes no duration histogram, so no engine-measured decode rate.
+  assert.equal(diff.decodeTokS, undefined)
+})
+
 console.log(`\n${passed} passed`)
 if (process.exitCode) {
   console.error("some tests failed")

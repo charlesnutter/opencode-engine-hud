@@ -36,7 +36,7 @@ get the universal layer.
 | `mtplx` | ✅ | ✅ per-turn | ✅ | ✅ | — | MTP speculative accept %, reasoning tokens | live |
 | `omlx` | ✅ (recovered, per-turn when 1 req/interval) | ❌ | ✅ (recovered) | ✅ | ✅ cached tokens | — | live |
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
-| `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ window average, not per-turn | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **fixtures only** (CUDA-only engine) |
+| `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
 | `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
 | `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
 | `aphrodite` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
@@ -72,10 +72,14 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   TTFT stays a window average (labelled `(avg)`). If several requests blend into
   one window, vllm-mlx drops the per-request rate rather than report a blended
   one.
-- **vLLM/SGLang/Aphrodite are validated against real captured `/metrics` text**
-  (`fixtures/`, `test/prometheus.test.mjs` — `npm test`), not a live server:
-  both require CUDA and can't run on Apple Silicon. Everything else here was
-  checked against a live instance.
+- **vLLM is live-validated via [vllm-metal](https://github.com/vllm-project/vllm-metal)**,
+  the official Apple Silicon plugin: it runs upstream vLLM's own API server with
+  an MLX/Metal compute backend, so its `/metrics` *is* vLLM's. Every field name
+  in our spec was confirmed against a live instance, with deltas cross-checked
+  against the response's own `usage`.
+- **SGLang and Aphrodite remain fixtures-only** — both need CUDA. They're
+  validated against real captured `/metrics` text (`fixtures/`,
+  `test/prometheus.test.mjs` — `npm test`), not a live server.
 
 ## Adding an engine to `opencode.json`
 
@@ -129,8 +133,11 @@ Per-engine notes:
   field) that this adapter doesn't read; use `llama-server` directly.
 - **MLX-LM** (`mlx_lm.server`) — any provider id; it has no server-wide
   `/metrics` of its own, so universal layer only.
-- **vLLM** — provider id `vllm`, default port 8000. Needs a CUDA host; point
-  `baseURL` at wherever it's actually running.
+- **vLLM** — provider id `vllm`, default port 8000. On a CUDA host, point
+  `baseURL` at wherever it runs. **On Apple Silicon**, install
+  [vllm-metal](https://github.com/vllm-project/vllm-metal)
+  (`brew tap vllm-project/vllm-metal …`) and `vllm serve <model>` works
+  normally — it's upstream vLLM, so this adapter needs no changes.
 - **SGLang** — provider id `sglang`, default port 30000. Also needs
   `--enable-metrics` on the server (off by default) or `/metrics` won't exist
   at all.
@@ -215,9 +222,8 @@ npm test
   `--enable-metrics`, port 23333, but exact field names unconfirmed) and
   **Modular MAX serve** (rich `maxserve_*` metrics including TTFT and
   inter-token latency, but Apple Silicon support unconfirmed).
-- **vllm-metal** — the official vLLM Apple Silicon plugin runs upstream vLLM's
-  own server, so the existing `vllm` adapter should work against it unchanged.
-  Installing it would turn that tier from fixtures-only into live-validated.
+- ~~**vllm-metal**~~ — done: confirmed the existing `vllm` adapter works
+  against it unchanged, which moved the vLLM tier to live-validated.
 - A live vLLM/SGLang server to validate the enrichment tier against real
   traffic, not just captured fixtures.
 - An optional keybind to toggle the panel independently of the sidebar.
