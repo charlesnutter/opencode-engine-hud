@@ -15,28 +15,119 @@ MTP 2.85x 81/60/43%
 On a model or provider switch the panel is replaced, never blended — a change
 zeroes cleanly rather than carrying a stale reading.
 
-## Engines
+## How it works: two tiers
 
-Every provider gets the **universal layer** for free — tok/s, TTFT, and exact
-tokens, read from OpenCode's own per-turn events (`message.part.delta` +
-`message.updated`). No engine endpoint needed, so Ollama, MLX-LM and any other
-OpenAI-compatible server all work out of the box. Some engines get richer
-**enrichment** on top, from their own server-side telemetry:
+**Universal layer** — every provider gets this for free, no engine endpoint
+needed. Built from OpenCode's own per-turn events (`message.part.delta` for
+streaming/TTFT, `message.updated` for exact final token counts and wall time),
+so it works for any OpenAI-compatible server: Ollama, MLX-LM, LM Studio,
+anything.
 
-| Provider | Source | What you get | Validated |
-|---|---|---|---|
-| **MTPLX** (`mtplx`) | `/metrics` `latest` receipt | Per-request precise: decode tok/s, TTFT, prefill, MTP speculative acceptance | live |
-| **oMLX** (`omlx`) | `/api/status`, differenced across the turn | Exact tokens + per-request rates. Poll, atomic-at-completion: no live ticker, no TTFT | live |
-| **llama.cpp** (`llamacpp`) | `/metrics`, differenced across the turn | Exact tokens, decode tok/s, prefill tok/s. Needs `--metrics` (off by default) | live |
-| **vLLM** (`vllm`) | Prometheus `/metrics`, differenced across the turn | Exact tokens (prompt/generation/cached), TTFT histogram average. Decode rate from OpenCode's own turn timing | fixtures only (CUDA-only engine) |
-| **SGLang** (`sglang`) | Prometheus `/metrics`, differenced across the turn | Same as vLLM | fixtures only (CUDA-only engine) |
-| others (Ollama, MLX-LM, LM Studio, …) | — | Universal layer only | live |
+**Enrichment** — five engines additionally get their own server-side telemetry
+fetched and merged in, keyed off the OpenCode *provider id* (the key under
+`.provider` in `opencode.json`). Get that id right (see below) and the richer
+line replaces the universal one automatically; anything else, and you still
+get the universal layer.
 
-vLLM and SGLang can't run on Apple Silicon, so that tier is validated against
-real captured `/metrics` text (`fixtures/`, `test/prometheus.test.mjs`) rather
-than a live server. Run it with `npm test`.
+## Engines: what each one shows
 
-## Install
+| Provider id | tok/s | TTFT | Prefill tok/s | Exact tokens | Cache info | Extras | Validated |
+|---|---|---|---|---|---|---|---|
+| `mtplx` | ✅ | ✅ per-turn | ✅ | ✅ | — | MTP speculative accept %, reasoning tokens | live |
+| `omlx` | ✅ (recovered, per-turn when 1 req/interval) | ❌ | ✅ (recovered) | ✅ | ✅ cached tokens | — | live |
+| `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
+| `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ window average, not per-turn | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **fixtures only** (CUDA-only engine) |
+| `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
+| anything else (Ollama, MLX-LM, LM Studio, …) | ✅ | ✅ per-turn | ❌ | ✅ | ❌ | — | live |
+
+Notes on what's *missing* and why, since that matters as much as what's shown:
+
+- **oMLX has no TTFT at all.** Its counters are atomic at completion — frozen
+  while a request runs, updated only once it lands — so there's nothing to
+  time a first token against without a live endpoint it doesn't expose.
+- **llama.cpp and oMLX have no prefill/decode split from their own data**
+  beyond what's differenced from cumulative counters; the panel's "prefill
+  tok/s" for these two *is* that differenced figure, not a separate timing.
+- **vLLM/SGLang's tok/s is not vLLM's own number.** Splitting decode from
+  prefill needs continuous polling mid-request, which this plugin doesn't do;
+  the rate shown instead reuses OpenCode's own streaming-delta timing (the
+  same source the universal layer uses for every other provider). Their TTFT
+  *is* engine-reported, but it's a Prometheus histogram average over
+  however many requests landed in the interval since the last turn — not this
+  turn's own value — labelled `(avg)` in the panel to say so.
+- **oMLX, vLLM and SGLang report cache-hit tokens; MTPLX and llama.cpp
+  don't.** Not because the data isn't there for MTPLX — its `/metrics` reports
+  `cached_tokens` too, this plugin just doesn't read that field yet. llama.cpp
+  has no cache counter at all; its prompt-token count is silently *lower* on a
+  cache hit, since the underlying counter only tracks what was actually
+  computed.
+- **vLLM/SGLang are validated against real captured `/metrics` text**
+  (`fixtures/`, `test/prometheus.test.mjs` — `npm test`), not a live server:
+  both require CUDA and can't run on Apple Silicon. Everything else here was
+  checked against a live instance.
+
+## Adding an engine to `opencode.json`
+
+The HUD only ever reads what OpenCode already knows about, so an engine has to
+exist as a **provider** in `opencode.json` before it can show up here at all —
+that's a separate file from this plugin's own `tui.json` config (below). The
+shape is the same for any OpenAI-compatible server:
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "provider": {
+    "<provider-id>": {
+      "name": "Display name",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://127.0.0.1:<port>/v1", "apiKey": "anything" },
+      "models": {
+        "<model id the server reports at /v1/models>": {
+          "name": "Display name for the model",
+          "limit": { "context": 32768, "output": 8192 },
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "tool_call": true
+        }
+      }
+    }
+  }
+}
+```
+
+**The provider id is what turns on enrichment** — use exactly `mtplx`, `omlx`,
+`llamacpp`, `vllm` or `sglang` to get that engine's richer line; any other key
+(e.g. `mlxlm`, `mystery-server`) still works fully, just with the universal
+layer only.
+
+Per-engine notes:
+
+- **Ollama** — `baseURL: "http://127.0.0.1:11434/v1"`. Any provider id (no
+  enrichment adapter for Ollama); its own `/api/*` telemetry is per-caller, not
+  server-wide, so there's nothing for this plugin to fetch beyond what
+  OpenCode's events already give it.
+- **llama.cpp** — provider id `llamacpp`, `baseURL:
+  "http://127.0.0.1:8080/v1"`. Start the **classic single-model binary**,
+  not the newer multi-model router:
+  ```bash
+  llama-server --hf-repo <user>/<repo> --hf-file <file>.gguf \
+    --host 127.0.0.1 --port 8080 --metrics
+  ```
+  `--metrics` is required — it's off by default, and without it this provider
+  falls back to the universal layer silently. The router (`llama serve`)
+  exposes a different `/props` shape (`model_path: "none"`, a `role: "router"`
+  field) that this adapter doesn't read; use `llama-server` directly.
+- **MLX-LM** (`mlx_lm.server`) — any provider id; it has no server-wide
+  `/metrics` of its own, so universal layer only.
+- **vLLM** — provider id `vllm`, default port 8000. Needs a CUDA host; point
+  `baseURL` at wherever it's actually running.
+- **SGLang** — provider id `sglang`, default port 30000. Also needs
+  `--enable-metrics` on the server (off by default) or `/metrics` won't exist
+  at all.
+- **MTPLX / oMLX** — provider ids `mtplx` / `omlx`. See their own docs for
+  serving; oMLX additionally needs `omlxApiKey` set in this plugin's own
+  config (next section) to read its telemetry.
+
+## Install (this plugin)
 
 Requires OpenCode ≥ 1.18.20. This is a **TUI plugin**, so it goes in
 `~/.config/opencode/tui.json` (not `opencode.json`):
@@ -57,13 +148,17 @@ Then restart OpenCode with the sidebar open. (Once published, `opencode plugin
 ## Configuration
 
 Options are passed in the `tui.json` plugin entry; each also has an env
-fallback.
+fallback. All are optional — an engine that isn't running or isn't configured
+just falls back to the universal layer.
 
-| Option | Env | Default | Notes |
-|---|---|---|---|
-| `mtplxMetricsUrl` | `MTPLX_METRICS_URL` | `http://127.0.0.1:8000/metrics` | MTPLX metrics endpoint |
-| `omlxBaseUrl` | `OMLX_BASE_URL` | `http://127.0.0.1:8099` | oMLX server base URL |
-| `omlxApiKey` | `OMLX_API_KEY` | *(none)* | oMLX's `/v1` API key. Required to read oMLX; without it the panel says so. |
+| Option | Env | Default |
+|---|---|---|
+| `mtplxMetricsUrl` | `MTPLX_METRICS_URL` | `http://127.0.0.1:8000/metrics` |
+| `omlxBaseUrl` | `OMLX_BASE_URL` | `http://127.0.0.1:8099` |
+| `omlxApiKey` | `OMLX_API_KEY` | *(none — required to read oMLX; without it the panel says so)* |
+| `llamacppBaseUrl` | `LLAMACPP_BASE_URL` | `http://127.0.0.1:8080` |
+| `vllmBaseUrl` | `VLLM_BASE_URL` | `http://127.0.0.1:8000` |
+| `sglangBaseUrl` | `SGLANG_BASE_URL` | `http://127.0.0.1:30000` |
 
 ## Local development
 
@@ -74,19 +169,25 @@ The runtime (SolidJS / opentui) is provided by OpenCode, so no build step or
 { "plugin": [["/Users/you/dev/opencode-hud", { "omlxApiKey": "…" }]] }
 ```
 
-Restart OpenCode to reload. For type-checking:
+Restart OpenCode to reload. For type-checking and the vLLM/SGLang fixture
+tests (these don't need the OpenCode runtime, so `npm install` is needed only
+for these):
 
 ```bash
-npm install      # pulls the type-only deps
+npm install
 npm run typecheck
+npm test
 ```
 
 ## Roadmap
 
-- More engines (Ollama, llama.cpp, vLLM, LM Studio) — the same normalized
-  approach as the [inference-hud](https://github.com/charlesnutter/inference-hud)
-  VS Code extension, which this shares telemetry techniques with.
+- LM Studio enrichment — low value; it only reports `stats.tokens_per_second`
+  per response, which the universal layer already approximates as well.
+- A live vLLM/SGLang server to validate the enrichment tier against real
+  traffic, not just captured fixtures.
 - An optional keybind to toggle the panel independently of the sidebar.
+- Publish to npm (`@charlesnutter/opencode-hud`) and list in the [OpenCode
+  ecosystem](https://opencode.ai/docs/ecosystem#plugins).
 
 ## License
 
