@@ -38,6 +38,8 @@ get the universal layer.
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ window average, not per-turn | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **fixtures only** (CUDA-only engine) |
 | `sglang` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
+| `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
+| `aphrodite` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **fixtures only** (CUDA-only engine) |
 | anything else (Ollama, MLX-LM, LM Studio, …) | ✅ | ✅ per-turn | ❌ | ✅ | ❌ | — | live |
 
 Notes on what's *missing* and why, since that matters as much as what's shown:
@@ -61,7 +63,16 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   has no cache counter at all; its prompt-token count is silently *lower* on a
   cache hit, since the underlying counter only tracks what was actually
   computed.
-- **vLLM/SGLang are validated against real captured `/metrics` text**
+- **vllm-mlx is the only Prometheus engine here with a true decode rate.** It
+  publishes both a TTFT *and* an end-to-end duration histogram, so when exactly
+  one request lands in the window — which is the norm, since OpenCode issues one
+  per turn — the deltas are that turn's own values, and decode rate comes out as
+  tokens ÷ (duration − TTFT), excluding prefill. vLLM/SGLang/Aphrodite publish
+  no duration histogram, so they fall back to OpenCode's turn timing and their
+  TTFT stays a window average (labelled `(avg)`). If several requests blend into
+  one window, vllm-mlx drops the per-request rate rather than report a blended
+  one.
+- **vLLM/SGLang/Aphrodite are validated against real captured `/metrics` text**
   (`fixtures/`, `test/prometheus.test.mjs` — `npm test`), not a live server:
   both require CUDA and can't run on Apple Silicon. Everything else here was
   checked against a live instance.
@@ -123,6 +134,17 @@ Per-engine notes:
 - **SGLang** — provider id `sglang`, default port 30000. Also needs
   `--enable-metrics` on the server (off by default) or `/metrics` won't exist
   at all.
+- **vllm-mlx** — provider id `vllmmlx` (or `vllm-mlx`), default port 8000.
+  The MLX-native Apple Silicon server, installable with `pip install vllm-mlx`.
+  Start it with the metrics flag, which is **`--enable-metrics`**, not
+  `--metrics` as some docs say:
+  ```bash
+  vllm-mlx serve mlx-community/Qwen2.5-0.5B-Instruct-4bit --port 8000 --enable-metrics
+  ```
+  Note it defaults to the same port as vLLM, so the two can't both run as-is.
+- **Aphrodite** — provider id `aphrodite`, default port **2242** (a holdover
+  from its KoboldAI origins). A vLLM fork, so its metrics are vLLM's under an
+  `aphrodite:` prefix. Needs a CUDA host.
 - **MTPLX / oMLX** — provider ids `mtplx` / `omlx`. See their own docs for
   serving; oMLX additionally needs `omlxApiKey` set in this plugin's own
   config (next section) to read its telemetry.
@@ -159,6 +181,8 @@ just falls back to the universal layer.
 | `llamacppBaseUrl` | `LLAMACPP_BASE_URL` | `http://127.0.0.1:8080` |
 | `vllmBaseUrl` | `VLLM_BASE_URL` | `http://127.0.0.1:8000` |
 | `sglangBaseUrl` | `SGLANG_BASE_URL` | `http://127.0.0.1:30000` |
+| `vllmMlxBaseUrl` | `VLLM_MLX_BASE_URL` | `http://127.0.0.1:8000` |
+| `aphroditeBaseUrl` | `APHRODITE_BASE_URL` | `http://127.0.0.1:2242` |
 
 ## Local development
 
@@ -183,6 +207,17 @@ npm test
 
 - LM Studio enrichment — low value; it only reports `stats.tokens_per_second`
   per response, which the universal layer already approximates as well.
+- **Checked and ruled out** (universal layer only, no server-wide telemetry
+  exists): **ExLlamaV3 / TabbyAPI** — despite third-party claims of a
+  Prometheus endpoint, there is none in its source; **lightning-mlx** — no
+  telemetry endpoint at all.
+- **Worth a look, not yet verified**: **LMDeploy** (real `/metrics` behind
+  `--enable-metrics`, port 23333, but exact field names unconfirmed) and
+  **Modular MAX serve** (rich `maxserve_*` metrics including TTFT and
+  inter-token latency, but Apple Silicon support unconfirmed).
+- **vllm-metal** — the official vLLM Apple Silicon plugin runs upstream vLLM's
+  own server, so the existing `vllm` adapter should work against it unchanged.
+  Installing it would turn that tier from fixtures-only into live-validated.
 - A live vLLM/SGLang server to validate the enrichment tier against real
   traffic, not just captured fixtures.
 - An optional keybind to toggle the panel independently of the sidebar.

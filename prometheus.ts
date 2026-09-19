@@ -7,9 +7,18 @@ export interface PromSpec {
   prefix: string
   promptTokens: string
   generationTokens: string
-  cachedTokens: string
+  /** Absent on engines with no prefix/prompt-cache counter (vllm-mlx). */
+  cachedTokens?: string
   ttftSum: string
   ttftCount: string
+  /**
+   * End-to-end request-duration histogram, where the engine publishes one.
+   * With it (and a TTFT histogram) a single request's decode window can be
+   * derived exactly — duration minus TTFT — instead of leaning on the
+   * caller's own wall clock.
+   */
+  durationSum?: string
+  durationCount?: string
 }
 
 export const VLLM_SPEC: PromSpec = {
@@ -30,12 +39,44 @@ export const SGLANG_SPEC: PromSpec = {
   ttftCount: "sglang:time_to_first_token_seconds_count",
 }
 
+/**
+ * Aphrodite is a vLLM fork and inherits its metric shape verbatim, under its
+ * own prefix — so it is the same spec with `vllm:` swapped for `aphrodite:`.
+ */
+export const APHRODITE_SPEC: PromSpec = {
+  prefix: "aphrodite:",
+  promptTokens: "aphrodite:prompt_tokens_total",
+  generationTokens: "aphrodite:generation_tokens_total",
+  cachedTokens: "aphrodite:prompt_tokens_cached_total",
+  ttftSum: "aphrodite:time_to_first_token_seconds_sum",
+  ttftCount: "aphrodite:time_to_first_token_seconds_count",
+}
+
+/**
+ * vllm-mlx (the MLX-native Apple Silicon server, not vllm-metal, which runs
+ * upstream vLLM itself and so uses VLLM_SPEC). Underscore-prefixed
+ * prometheus_client names, labelled by endpoint/stream, and — unusually — it
+ * publishes BOTH a TTFT and an end-to-end duration histogram, so a single
+ * turn's decode window is recoverable exactly. No prompt-cache counter.
+ */
+export const VLLM_MLX_SPEC: PromSpec = {
+  prefix: "vllm_mlx_",
+  promptTokens: "vllm_mlx_prompt_tokens_total",
+  generationTokens: "vllm_mlx_completion_tokens_total",
+  ttftSum: "vllm_mlx_inference_ttft_seconds_sum",
+  ttftCount: "vllm_mlx_inference_ttft_seconds_count",
+  durationSum: "vllm_mlx_inference_request_duration_seconds_sum",
+  durationCount: "vllm_mlx_inference_request_duration_seconds_count",
+}
+
 export interface PromSample {
   prompt: number
   generation: number
   cached: number
   ttftSum: number
   ttftCount: number
+  durationSum: number
+  durationCount: number
 }
 
 /**
@@ -64,9 +105,11 @@ export function parsePromSample(text: string, spec: PromSpec): PromSample | null
   return {
     prompt: sumLabeledMetric(text, spec.promptTokens),
     generation: sumLabeledMetric(text, spec.generationTokens),
-    cached: sumLabeledMetric(text, spec.cachedTokens),
+    cached: spec.cachedTokens ? sumLabeledMetric(text, spec.cachedTokens) : 0,
     ttftSum: sumLabeledMetric(text, spec.ttftSum),
     ttftCount: sumLabeledMetric(text, spec.ttftCount),
+    durationSum: spec.durationSum ? sumLabeledMetric(text, spec.durationSum) : 0,
+    durationCount: spec.durationCount ? sumLabeledMetric(text, spec.durationCount) : 0,
   }
 }
 
@@ -88,7 +131,21 @@ export interface PromDiff {
   completionTokens: number
   promptTokens: number
   cachedTokens: number
-  ttftAvg?: number
+  /** Mean TTFT over the requests in this window; exact when `ttftExact`. */
+  ttft?: number
+  /**
+   * True when exactly one request landed in the window, which makes `ttft`
+   * and `durationS` that request's own values rather than an average over
+   * several. OpenCode issues one request per turn, so this is the norm.
+   */
+  ttftExact: boolean
+  durationS?: number
+  /**
+   * Decode rate measured by the engine itself: tokens over (duration - TTFT),
+   * i.e. excluding prefill. Only when the engine publishes both histograms
+   * and exactly one request landed, so it describes this turn alone.
+   */
+  decodeTokS?: number
 }
 
 /**
@@ -102,10 +159,25 @@ export function diffPromSamples(prev: PromSample, now: PromSample): PromDiff | n
   const completionTokens = now.generation - prev.generation
   if (completionTokens <= 0) return null
   const dTtftCount = now.ttftCount - prev.ttftCount
+  const ttft = dTtftCount > 0 ? (now.ttftSum - prev.ttftSum) / dTtftCount : undefined
+  const dDurCount = now.durationCount - prev.durationCount
+  const durationS = dDurCount > 0 ? (now.durationSum - prev.durationSum) / dDurCount : undefined
+
+  // Exactly one request in the window makes both figures this turn's own.
+  const exact = dTtftCount === 1
+  let decodeTokS: number | undefined
+  if (exact && dDurCount === 1 && ttft !== undefined && durationS !== undefined) {
+    const decodeWindow = durationS - ttft
+    if (decodeWindow > 0) decodeTokS = completionTokens / decodeWindow
+  }
+
   return {
     completionTokens,
     promptTokens: now.prompt - prev.prompt,
     cachedTokens: now.cached - prev.cached,
-    ttftAvg: dTtftCount > 0 ? (now.ttftSum - prev.ttftSum) / dTtftCount : undefined,
+    ttft,
+    ttftExact: exact,
+    durationS,
+    decodeTokS,
   }
 }

@@ -23,7 +23,7 @@
 import type { TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
-import { PromSpec, VLLM_SPEC, SGLANG_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
+import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
 
 interface Config {
   mtplxUrl: string
@@ -32,6 +32,8 @@ interface Config {
   llamacppBase: string
   vllmBase: string
   sglangBase: string
+  vllmMlxBase: string
+  aphroditeBase: string
 }
 
 const nn = (v: unknown, d = 1) =>
@@ -303,12 +305,17 @@ async function prometheusLine(
   const diff = diffPromSamples(prev, now)
   if (!diff) return null
 
-  const { decodeTokS, total } = turnRate(diff.completionTokens, info, turn)
+  // Prefer the engine's own measured decode rate (duration minus TTFT, one
+  // request) where it publishes the histograms for it; otherwise fall back to
+  // OpenCode's turn timing, which is all vLLM/SGLang can support.
+  const fallback = turnRate(diff.completionTokens, info, turn)
+  const decodeTokS = diff.decodeTokS ?? fallback.decodeTokS
+  const total = diff.durationS ?? fallback.total
+  const ttftLabel =
+    diff.ttft !== undefined ? `  ttft ${nn(diff.ttft, 2)}s${diff.ttftExact ? "" : " (avg)"}` : ""
   return [
     `${label}  ${short(model)}`,
-    decodeTokS !== undefined
-      ? `${nn(decodeTokS)} tok/s${diff.ttftAvg !== undefined ? `  ttft ${nn(diff.ttftAvg, 2)}s (avg)` : ""}`
-      : "",
+    decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s${ttftLabel}` : ttftLabel.trim(),
     `${ni(diff.completionTokens)} tok  (${ni(diff.promptTokens)} prompt${diff.cachedTokens > 0 ? `, ${ni(diff.cachedTokens)} cached` : ""})${total !== undefined ? `  ${nn(total, 2)}s` : ""}`,
   ].filter(Boolean).join("\n")
 }
@@ -354,6 +361,8 @@ const tui: TuiPlugin = async (api, options) => {
     llamacppBase: str(opts.llamacppBaseUrl, "LLAMACPP_BASE_URL", "http://127.0.0.1:8080").replace(/\/+$/, ""),
     vllmBase: str(opts.vllmBaseUrl, "VLLM_BASE_URL", "http://127.0.0.1:8000").replace(/\/+$/, ""),
     sglangBase: str(opts.sglangBaseUrl, "SGLANG_BASE_URL", "http://127.0.0.1:30000").replace(/\/+$/, ""),
+    vllmMlxBase: str(opts.vllmMlxBaseUrl, "VLLM_MLX_BASE_URL", "http://127.0.0.1:8000").replace(/\/+$/, ""),
+    aphroditeBase: str(opts.aphroditeBaseUrl, "APHRODITE_BASE_URL", "http://127.0.0.1:2242").replace(/\/+$/, ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -400,6 +409,10 @@ const tui: TuiPlugin = async (api, options) => {
     else if (provider === "llamacpp") line = await llamacppLine(cfg, model)
     else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t)
     else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t)
+    else if (provider === "vllmmlx" || provider === "vllm-mlx")
+      line = await prometheusLine("vllmmlx", VLLM_MLX_SPEC, cfg.vllmMlxBase, "vllm-mlx", model, info, t)
+    else if (provider === "aphrodite")
+      line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t)
     if (!line) line = universalLine(provider, model, info, t)
     turns.delete(info.id)
     if (line) {

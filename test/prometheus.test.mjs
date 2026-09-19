@@ -1,10 +1,12 @@
 // Validates prometheus.ts against real captured /metrics text (fixtures/,
 // taken from the inference-hud VS Code extension's own verified captures).
 //
-// vLLM and SGLang are CUDA-only, so unlike the MTPLX/oMLX/llama.cpp tiers
-// (each checked against a live local server) this tier can only be validated
-// against these fixtures — real bytes an engine actually produced, not
-// hand-written text. Run with: bun test/prometheus.test.mjs
+// vLLM, SGLang and Aphrodite are CUDA-only, so those are validated against
+// captured fixtures — real bytes those engines produced, not hand-written
+// text. The vllm-mlx fixtures are different: they were captured live from a
+// local server on this machine, before and after a single real generation,
+// so its assertions check values cross-checked against that response's own
+// `usage`. Run with: bun test/prometheus.test.mjs
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -15,6 +17,8 @@ import {
   diffPromSamples,
   VLLM_SPEC,
   SGLANG_SPEC,
+  APHRODITE_SPEC,
+  VLLM_MLX_SPEC,
 } from "../prometheus.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
@@ -65,7 +69,7 @@ test("vLLM: diff across a turn gives exact tokens and a TTFT average", () => {
   assert.equal(diff.completionTokens, 50)
   assert.equal(diff.promptTokens, 12)
   assert.equal(diff.cachedTokens, 0)
-  assert.ok(Math.abs(diff.ttftAvg - 0.3) < 1e-9, `ttftAvg=${diff.ttftAvg}`)
+  assert.ok(Math.abs(diff.ttft - 0.3) < 1e-9, `ttft=${diff.ttft}`)
 })
 
 // ---- vLLM: nothing landed -> no completion (not a zero-token turn) --------
@@ -127,6 +131,68 @@ test("cross-check: vLLM text does not parse against the SGLang spec", () => {
 })
 test("cross-check: SGLang text does not parse against the vLLM spec", () => {
   assert.equal(parsePromSample(fixture("sglang-idle.prom"), VLLM_SPEC), null)
+})
+
+// ---- vllm-mlx: captured LIVE, before/after one real generation ------------
+// The turn between these two captures reported, in its own response body:
+//   usage: { prompt_tokens: 33, completion_tokens: 50 }
+// Both histograms advanced by exactly 1, so TTFT and duration are that single
+// request's own values, not an average.
+test("vllm-mlx: parses the live capture's counters and histograms", () => {
+  const s = parsePromSample(fixture("vllm-mlx-idle.prom"), VLLM_MLX_SPEC)
+  assert.ok(s, "expected a sample (vllm_mlx_ prefix present)")
+  assert.equal(s.prompt, 72)
+  assert.equal(s.generation, 124)
+  assert.equal(s.cached, 0) // vllm-mlx publishes no prompt-cache counter
+  assert.equal(s.ttftCount, 2)
+  assert.equal(s.durationCount, 2)
+})
+
+test("vllm-mlx: diff matches the response's own usage, exactly", () => {
+  const before = parsePromSample(fixture("vllm-mlx-idle.prom"), VLLM_MLX_SPEC)
+  const now = parsePromSample(fixture("vllm-mlx-after.prom"), VLLM_MLX_SPEC)
+  const diff = diffPromSamples(before, now)
+  assert.ok(diff)
+  // Cross-checked against the live response body's usage block.
+  assert.equal(diff.completionTokens, 50)
+  assert.equal(diff.promptTokens, 33)
+  // One request in the window -> these are its own values, not an average.
+  assert.equal(diff.ttftExact, true)
+  assert.ok(Math.abs(diff.ttft - 0.07569008297287) < 1e-6, `ttft=${diff.ttft}`)
+  assert.ok(Math.abs(diff.durationS - 0.192384666996076) < 1e-6, `duration=${diff.durationS}`)
+  // Engine-measured decode rate: tokens / (duration - ttft), excluding prefill.
+  assert.ok(diff.decodeTokS > 400 && diff.decodeTokS < 460, `decodeTokS=${diff.decodeTokS}`)
+})
+
+test("vllm-mlx: two requests in one window drops the exact flag and the decode rate", () => {
+  const before = parsePromSample(fixture("vllm-mlx-idle.prom"), VLLM_MLX_SPEC)
+  // Same generation delta, but both histograms advanced by 2 rather than 1.
+  const now = {
+    ...parsePromSample(fixture("vllm-mlx-after.prom"), VLLM_MLX_SPEC),
+    ttftCount: before.ttftCount + 2,
+    durationCount: before.durationCount + 2,
+  }
+  const diff = diffPromSamples(before, now)
+  assert.ok(diff)
+  assert.equal(diff.ttftExact, false)
+  assert.equal(diff.decodeTokS, undefined, "no per-request rate when several requests blend")
+  assert.ok(diff.ttft !== undefined, "still reports the window average")
+})
+
+// ---- Aphrodite: vLLM's shape under its own prefix -------------------------
+test("Aphrodite: parses vLLM-shaped metrics under the aphrodite: prefix", () => {
+  // Aphrodite is CUDA-only; this reuses the real vLLM capture with the prefix
+  // swapped, which is precisely the documented difference between them.
+  const text = fixture("vllm-idle.prom").replace(/vllm:/g, "aphrodite:")
+  const s = parsePromSample(text, APHRODITE_SPEC)
+  assert.ok(s)
+  assert.equal(s.prompt, 78)
+  assert.equal(s.generation, 700)
+  assert.equal(s.ttftCount, 2)
+})
+
+test("cross-check: vLLM text does not parse against the vllm-mlx spec", () => {
+  assert.equal(parsePromSample(fixture("vllm-idle.prom"), VLLM_MLX_SPEC), null)
 })
 
 console.log(`\n${passed} passed`)
