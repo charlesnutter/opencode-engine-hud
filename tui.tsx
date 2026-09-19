@@ -1,23 +1,23 @@
 /** @jsxImportSource @opentui/solid */
 // opencode-hud — persistent per-turn local-inference stats in the sidebar.
 //
-// Renders into the `sidebar_footer` slot. After each assistant turn it reads the
-// serving engine's telemetry and shows a compact block, keyed to the model that
-// produced it — on a model or provider change the panel is replaced, never
-// blended, so a switch zeroes cleanly.
+// Two tiers of data:
+//   1. Universal layer — every provider OpenCode talks to. Built from OpenCode's
+//      own events: `message.part.delta` gives streaming (first delta = TTFT,
+//      byte deltas estimate live tokens) and `message.updated` gives the exact
+//      final counts (tokens.output/input/reasoning) and wall time. No engine
+//      endpoint needed, so Ollama, llama.cpp, MLX-LM, vLLM, SGLang and anything
+//      OpenAI-compatible all work.
+//   2. Per-engine enrichment — where an engine exposes richer server-side data,
+//      fetch it and show that instead. MTPLX (/metrics) and oMLX (/api/status)
+//      are wired; every other provider falls back to the universal line.
 //
-// Engines:
-//   - MTPLX  (provider id `mtplx`) — /metrics `latest` receipt, per-request
-//            precise: decode tok/s, TTFT, prefill, MTP speculative acceptance.
-//   - oMLX   (provider id `omlx`)  — /api/status, differenced across the turn.
-//            Poll, atomic-at-completion: exact tokens + per-request rates
-//            recovered from the running average, no live ticker or TTFT.
-//   - others — a name and a dash (no adapter yet).
+// The panel is keyed to provider+model: a switch replaces it, never blends.
 //
 // Config (plugin options in tui.json, or env fallback):
-//   mtplxMetricsUrl  (MTPLX_METRICS_URL)  default http://127.0.0.1:8000/metrics
-//   omlxBaseUrl      (OMLX_BASE_URL)       default http://127.0.0.1:8099
-//   omlxApiKey       (OMLX_API_KEY)        required to read oMLX; no default
+//   mtplxMetricsUrl (MTPLX_METRICS_URL)  default http://127.0.0.1:8000/metrics
+//   omlxBaseUrl     (OMLX_BASE_URL)       default http://127.0.0.1:8099
+//   omlxApiKey      (OMLX_API_KEY)        required to read oMLX; no default
 //
 //   "plugin": [["@charlesnutter/opencode-hud", { "omlxApiKey": "…" }]]
 import type { TextRenderable } from "@opentui/core"
@@ -54,7 +54,44 @@ async function getJson(url: string, headers?: Record<string, string>): Promise<a
   }
 }
 
-// ---- MTPLX: /metrics `latest` receipt, per-request precise -----------------
+// ---- Tier 1: universal, from OpenCode's own per-turn events -----------------
+interface Turn {
+  startAt?: number // request start (message.time.created), for TTFT
+  firstAt?: number // first streamed delta
+  lastAt?: number // last streamed delta
+  bytes: number // streamed bytes, for an estimate when usage is absent
+}
+
+function universalLine(provider: string, model: string, info: any, turn?: Turn): string {
+  const out: number = info?.tokens?.output ?? 0
+  const reason: number = info?.tokens?.reasoning ?? 0
+  const created = info?.time?.created
+  const completed = info?.time?.completed
+  const total = typeof created === "number" && typeof completed === "number" ? (completed - created) / 1000 : undefined
+
+  let ttft: number | undefined
+  let decodeTokS: number | undefined
+  if (turn) {
+    if (turn.firstAt && turn.startAt) ttft = (turn.firstAt - turn.startAt) / 1000
+    if (turn.firstAt && turn.lastAt && turn.lastAt > turn.firstAt && out > 0) {
+      decodeTokS = out / ((turn.lastAt - turn.firstAt) / 1000)
+    }
+  }
+  // Fall back to whole-request rate if the stream window was too short to time.
+  if (decodeTokS === undefined && out > 0 && total && total > 0) decodeTokS = out / total
+
+  const think = reason > 0 ? ` (+${ni(reason)} think)` : ""
+  const rate =
+    decodeTokS !== undefined
+      ? `${nn(decodeTokS)} tok/s${ttft !== undefined ? `  ttft ${nn(ttft, 2)}s` : ""}`
+      : ttft !== undefined
+        ? `ttft ${nn(ttft, 2)}s`
+        : ""
+  const totals = `${ni(out)} tok${think}${total !== undefined ? `  ${nn(total, 2)}s` : ""}`
+  return [`${provider}  ${short(model)}`, rate, totals].filter(Boolean).join("\n")
+}
+
+// ---- Tier 2: MTPLX enrichment — /metrics `latest`, per-request precise ------
 async function mtplxLine(cfg: Config, model: string): Promise<string | null> {
   const body = await getJson(cfg.mtplxUrl)
   const l = body?.latest
@@ -78,7 +115,7 @@ async function mtplxLine(cfg: Config, model: string): Promise<string | null> {
   ].filter(Boolean).join("\n")
 }
 
-// ---- oMLX: /api/status, differenced across the turn -------------------------
+// ---- Tier 2: oMLX enrichment — /api/status, differenced across the turn -----
 interface OmlxSample {
   requests: number
   prompt: number
@@ -91,7 +128,7 @@ interface OmlxSample {
 let omlxPrev: OmlxSample | undefined
 
 async function omlxSample(cfg: Config): Promise<OmlxSample | null> {
-  if (!cfg.omlxKey) return null // no key configured; oMLX cannot be read
+  if (!cfg.omlxKey) return null
   const j = await getJson(`${cfg.omlxBase}/api/status`, { authorization: `Bearer ${cfg.omlxKey}` })
   if (!j) return null
   return {
@@ -107,20 +144,15 @@ async function omlxSample(cfg: Config): Promise<OmlxSample | null> {
 
 async function omlxLine(cfg: Config): Promise<string | null> {
   const s = await omlxSample(cfg)
-  if (!s) return cfg.omlxKey ? null : "oMLX\nset omlxApiKey to read stats"
+  if (!s) return null
   const prev = omlxPrev
   omlxPrev = s
-  // No baseline (first turn, or model just changed): show what this reading has
-  // rather than a delta we cannot compute yet.
   if (!prev || prev.model !== s.model || s.requests <= prev.requests) {
     return [`oMLX  ${short(s.model ?? "")}`, `${nn(s.avgGen)} tok/s (server avg)`, `prefill ${ni(s.avgPrefill)} tok/s (avg)`]
       .join("\n")
   }
   const dReq = s.requests - prev.requests
   const comp = s.completion - prev.completion
-  // avg_generation_tps is the arithmetic mean of per-request rates, so the last
-  // request's rate is avg_new*n_new - avg_prev*n_prev — exact when one request
-  // landed between polls. Fall back to the current average otherwise.
   let decode = dReq === 1 ? s.avgGen * s.requests - prev.avgGen * prev.requests : NaN
   let prefill = dReq === 1 ? s.avgPrefill * s.requests - prev.avgPrefill * prev.requests : NaN
   if (!(decode > 0)) decode = s.avgGen
@@ -179,52 +211,92 @@ const tui: TuiPlugin = async (api, options) => {
     for (const l of store.listeners) l()
   }
 
-  // Seed an oMLX baseline so the first omlx turn can be differenced. Best
-  // effort: if oMLX is not up or unkeyed, the first turn seeds it instead.
+  // Per-turn stream timing for the universal layer, keyed by message id.
+  const turns = new Map<string, Turn>()
+  const turn = (id: string): Turn => {
+    let t = turns.get(id)
+    if (!t) {
+      t = { bytes: 0 }
+      turns.set(id, t)
+      if (turns.size > 64) {
+        // Bound the map; drop the oldest insertion.
+        const first = turns.keys().next().value
+        if (first && first !== id) turns.delete(first)
+      }
+    }
+    return t
+  }
+
   omlxSample(cfg).then((s) => {
     if (s) omlxPrev = s
   }).catch(() => {})
 
   let lastKey = ""
-  const refresh = async (provider: string, model: string) => {
+  const refresh = async (info: any, provider: string, model: string) => {
     const key = `${provider}/${model}`
     if (key !== lastKey) {
-      // Model or provider changed: zero the panel immediately rather than leave
-      // the previous model's numbers up while the new reading is fetched.
       store.text = `${provider}  ${short(model)}\n…`
       bump()
       lastKey = key
     }
+    const t = turns.get(info.id)
+    // Prefer richer per-engine enrichment; fall back to the universal line.
     let line: string | null = null
     if (provider === "mtplx") line = await mtplxLine(cfg, model)
     else if (provider === "omlx") line = await omlxLine(cfg)
-    else line = `${provider}  ${short(model)}\n(no HUD adapter)`
+    if (!line) line = universalLine(provider, model, info, t)
+    turns.delete(info.id)
     if (line) {
       store.text = line
       bump()
     }
   }
 
-  let off: (() => void) | undefined
+  const offs: Array<() => void> = []
   try {
-    off = api.event.on("message.updated", (evt: any) => {
-      const info = evt?.properties?.info
-      if (!info || info.role !== "assistant") return
-      if (info.summary === true) return
-      if (!info.time?.completed) return
-      const provider = String(info.providerID ?? "")
-      const model = String(info.modelID ?? "")
-      setTimeout(() => {
-        refresh(provider, model).catch(() => {})
-      }, 120)
-    })
+    offs.push(
+      api.event.on("message.part.delta", (evt: any) => {
+        const p = evt?.properties
+        if (!p || (p.field !== "text" && p.field !== "reasoning")) return
+        const id = p.messageID
+        if (!id) return
+        const t = turn(id)
+        const now = Date.now()
+        if (!t.firstAt) t.firstAt = now
+        t.lastAt = now
+        if (typeof p.delta === "string") t.bytes += Buffer.byteLength(p.delta, "utf8")
+      })
+    )
+    offs.push(
+      api.event.on("message.updated", (evt: any) => {
+        const info = evt?.properties?.info
+        if (!info || info.role !== "assistant") return
+        if (info.summary === true) return
+        const id = String(info.id ?? "")
+        if (!info.time?.completed) {
+          // In-flight: capture the request start for TTFT.
+          if (id && typeof info.time?.created === "number") {
+            const t = turn(id)
+            if (t.startAt === undefined) t.startAt = info.time.created
+          }
+          return
+        }
+        const provider = String(info.providerID ?? "")
+        const model = String(info.modelID ?? "")
+        setTimeout(() => {
+          refresh(info, provider, model).catch(() => {})
+        }, 120)
+      })
+    )
   } catch {}
 
   try {
     api.lifecycle?.onDispose?.(() => {
-      try {
-        off?.()
-      } catch {}
+      for (const off of offs) {
+        try {
+          off()
+        } catch {}
+      }
     })
   } catch {}
 
