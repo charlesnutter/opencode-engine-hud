@@ -28,6 +28,7 @@ interface Config {
   mtplxUrl: string
   omlxBase: string
   omlxKey: string
+  llamacppBase: string
 }
 
 const nn = (v: unknown, d = 1) =>
@@ -166,6 +167,92 @@ async function omlxLine(cfg: Config): Promise<string | null> {
   ].join("\n")
 }
 
+// ---- Tier 2: llama.cpp enrichment — /metrics, differenced across the turn --
+// llama.cpp's counters are atomic at completion, exactly like oMLX's: they sit
+// still while a request runs and jump once it lands (confirmed against a live
+// server). So the same across-turn snapshot diff applies, with no need for the
+// continuous /slots poll loop a true live ticker would require — the universal
+// layer above already covers TTFT and a live estimate from OpenCode's own
+// streaming events. Needs the server started with --metrics (off by default);
+// unmetriced or unreachable servers just fail the fetch and fall back to the
+// universal line.
+interface LlamaCppCounters {
+  promptTokens: number
+  promptSeconds: number
+  predictedTokens: number
+  predictedSeconds: number
+}
+let llamacppPrev: LlamaCppCounters | undefined
+
+async function getText(url: string): Promise<string | null> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 2500)
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, headers: { connection: "close" } })
+    if (!res.ok) return null
+    return await res.text()
+  } catch {
+    return null
+  } finally {
+    clearTimeout(t)
+  }
+}
+
+/** llama.cpp emits bare `name value` lines with no labels. */
+function parsePrometheus(text: string): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const line of text.split("\n")) {
+    if (line.startsWith("#") || !line.trim()) continue
+    const sp = line.lastIndexOf(" ")
+    if (sp === -1) continue
+    const name = line.slice(0, sp).replace(/\{.*\}$/, "")
+    const value = Number(line.slice(sp + 1))
+    if (!Number.isNaN(value)) out[name] = value
+  }
+  return out
+}
+
+async function llamacppCounters(cfg: Config): Promise<LlamaCppCounters | null> {
+  const text = await getText(`${cfg.llamacppBase}/metrics`)
+  if (text === null) return null
+  const v = parsePrometheus(text)
+  return {
+    promptTokens: v["llamacpp:prompt_tokens_total"] ?? 0,
+    promptSeconds: v["llamacpp:prompt_seconds_total"] ?? 0,
+    predictedTokens: v["llamacpp:tokens_predicted_total"] ?? 0,
+    predictedSeconds: v["llamacpp:tokens_predicted_seconds_total"] ?? 0,
+  }
+}
+
+async function llamacppLine(cfg: Config, model: string): Promise<string | null> {
+  const now = await llamacppCounters(cfg)
+  if (!now) return null // unreachable, or started without --metrics
+  const prev = llamacppPrev
+  llamacppPrev = now
+  if (!prev || now.predictedTokens <= prev.predictedTokens) {
+    // No baseline yet (first turn since launch), or nothing moved (answered
+    // from cache faster than we could sample, or a concurrent caller's turn
+    // already advanced the counters). The universal line still covers this
+    // turn; the next one gets a clean diff.
+    return null
+  }
+  const completionTokens = now.predictedTokens - prev.predictedTokens
+  const decodeS = now.predictedSeconds - prev.predictedSeconds
+  // The counter under-reports the prompt on a cache hit (it counts only what
+  // was actually computed), but with no live /slots sample at hand to correct
+  // it, this is what's available — same tradeoff the extension's adapter notes.
+  const promptTokens = now.promptTokens - prev.promptTokens
+  const prefillS = now.promptSeconds - prev.promptSeconds
+  const decodeTokS = decodeS > 0 ? completionTokens / decodeS : undefined
+  const prefillTokS = prefillS > 0 && promptTokens > 0 ? promptTokens / prefillS : undefined
+  return [
+    `llama.cpp  ${short(model)}`,
+    decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s` : "",
+    prefillTokS !== undefined ? `prefill ${ni(prefillTokS)} tok/s` : "",
+    `${ni(completionTokens)} tok  ${nn(decodeS + prefillS, 2)}s`,
+  ].filter(Boolean).join("\n")
+}
+
 interface Store { text: string; listeners: Set<() => void> }
 
 function SidebarFooter(props: { api: Parameters<TuiPlugin>[0]; store: Store }) {
@@ -204,6 +291,7 @@ const tui: TuiPlugin = async (api, options) => {
     mtplxUrl: str(opts.mtplxMetricsUrl, "MTPLX_METRICS_URL", "http://127.0.0.1:8000/metrics"),
     omlxBase: str(opts.omlxBaseUrl, "OMLX_BASE_URL", "http://127.0.0.1:8099").replace(/\/+$/, ""),
     omlxKey: str(opts.omlxApiKey, "OMLX_API_KEY", ""),
+    llamacppBase: str(opts.llamacppBaseUrl, "LLAMACPP_BASE_URL", "http://127.0.0.1:8080").replace(/\/+$/, ""),
   }
 
   const store: Store = { text: "inference · —", listeners: new Set() }
@@ -230,6 +318,9 @@ const tui: TuiPlugin = async (api, options) => {
   omlxSample(cfg).then((s) => {
     if (s) omlxPrev = s
   }).catch(() => {})
+  llamacppCounters(cfg).then((c) => {
+    if (c) llamacppPrev = c
+  }).catch(() => {})
 
   let lastKey = ""
   const refresh = async (info: any, provider: string, model: string) => {
@@ -244,6 +335,7 @@ const tui: TuiPlugin = async (api, options) => {
     let line: string | null = null
     if (provider === "mtplx") line = await mtplxLine(cfg, model)
     else if (provider === "omlx") line = await omlxLine(cfg)
+    else if (provider === "llamacpp") line = await llamacppLine(cfg, model)
     if (!line) line = universalLine(provider, model, info, t)
     turns.delete(info.id)
     if (line) {
