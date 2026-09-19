@@ -24,6 +24,7 @@ import type { TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { fetchKoboldPerf, koboldTurn } from "./koboldcpp"
+import { Turn, turnRate, universalLine, short, nn, ni } from "./universal"
 import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
 
 interface Config {
@@ -38,81 +39,6 @@ interface Config {
   lmdeployBase: string
   llamafileBase: string
   koboldBase: string
-}
-
-const nn = (v: unknown, d = 1) =>
-  typeof v === "number" && isFinite(v) ? v.toFixed(d) : "?"
-const ni = (v: unknown) =>
-  typeof v === "number" && isFinite(v) ? String(Math.round(v)) : "?"
-
-function short(model: string): string {
-  const tail = model.split("/").pop() ?? model
-  return tail.length > 24 ? tail.slice(0, 23) + "…" : tail
-}
-
-async function getJson(url: string, headers?: Record<string, string>): Promise<any | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, headers })
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
-}
-
-// ---- Tier 1: universal, from OpenCode's own per-turn events -----------------
-interface Turn {
-  startAt?: number // request start (message.time.created), for TTFT
-  firstAt?: number // first streamed delta
-  lastAt?: number // last streamed delta
-  bytes: number // streamed bytes, for an estimate when usage is absent
-}
-
-/**
- * Decode rate, TTFT and total time from OpenCode's own per-turn timing —
- * `time.created`/`time.completed` on the message, and the streaming-delta
- * marks in `turn`. Shared by the universal line and by enrichment tiers that
- * have exact token counts but no per-request timing of their own (vLLM,
- * SGLang): their Prometheus counters need continuous polling to split decode
- * from prefill, which nothing here does, but OpenCode's own event stream
- * already has it for free.
- */
-function turnRate(tokens: number, info: any, turn?: Turn): { decodeTokS?: number; ttft?: number; total?: number } {
-  const created = info?.time?.created
-  const completed = info?.time?.completed
-  const total = typeof created === "number" && typeof completed === "number" ? (completed - created) / 1000 : undefined
-
-  let ttft: number | undefined
-  let decodeTokS: number | undefined
-  if (turn) {
-    if (turn.firstAt && turn.startAt) ttft = (turn.firstAt - turn.startAt) / 1000
-    if (turn.firstAt && turn.lastAt && turn.lastAt > turn.firstAt && tokens > 0) {
-      decodeTokS = tokens / ((turn.lastAt - turn.firstAt) / 1000)
-    }
-  }
-  // Fall back to whole-request rate if the stream window was too short to time.
-  if (decodeTokS === undefined && tokens > 0 && total && total > 0) decodeTokS = tokens / total
-  return { decodeTokS, ttft, total }
-}
-
-function universalLine(provider: string, model: string, info: any, turn?: Turn): string {
-  const out: number = info?.tokens?.output ?? 0
-  const reason: number = info?.tokens?.reasoning ?? 0
-  const { decodeTokS, ttft, total } = turnRate(out, info, turn)
-
-  const think = reason > 0 ? ` (+${ni(reason)} think)` : ""
-  const rate =
-    decodeTokS !== undefined
-      ? `${nn(decodeTokS)} tok/s${ttft !== undefined ? `  ttft ${nn(ttft, 2)}s` : ""}`
-      : ttft !== undefined
-        ? `ttft ${nn(ttft, 2)}s`
-        : ""
-  const totals = `${ni(out)} tok${think}${total !== undefined ? `  ${nn(total, 2)}s` : ""}`
-  return [`${provider}  ${short(model)}`, rate, totals].filter(Boolean).join("\n")
 }
 
 // ---- Tier 2: MTPLX enrichment — /metrics `latest`, per-request precise ------
