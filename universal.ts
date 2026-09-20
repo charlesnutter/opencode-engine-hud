@@ -45,6 +45,8 @@ export function tokensLabel(total: number, reasoning: number): string {
 }
 
 // ---- Tier 1: universal, from OpenCode's own per-turn events -----------------
+import type { AssistantMessage } from "@opencode-ai/sdk/v2"
+
 export interface Turn {
   startAt?: number // request start (message.time.created), for TTFT
   firstAt?: number // first streamed delta
@@ -61,7 +63,7 @@ export interface Turn {
  * from prefill, which nothing here does, but OpenCode's own event stream
  * already has it for free.
  */
-export function turnRate(tokens: number, info: any, turn?: Turn): { decodeTokS?: number; ttft?: number; total?: number } {
+export function turnRate(tokens: number, info: AssistantMessage | undefined, turn?: Turn): { decodeTokS?: number; ttft?: number; total?: number } {
   const created = info?.time?.created
   const completed = info?.time?.completed
   const total = typeof created === "number" && typeof completed === "number" ? (completed - created) / 1000 : undefined
@@ -79,7 +81,12 @@ export function turnRate(tokens: number, info: any, turn?: Turn): { decodeTokS?:
   return { decodeTokS, ttft, total }
 }
 
-export function universalLine(provider: string, model: string, info: any, turn?: Turn): string {
+export function universalLine(
+  provider: string,
+  model: string,
+  info: AssistantMessage | undefined,
+  turn?: Turn
+): string {
   const out: number = info?.tokens?.output ?? 0
   const reason: number = info?.tokens?.reasoning ?? 0
   // Reasoning tokens are decoded tokens: they are produced one at a time

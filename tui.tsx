@@ -20,7 +20,7 @@
 //   omlxApiKey      (OMLX_API_KEY)        required to read oMLX; no default
 //
 //   "plugin": [["@charlesnutter/opencode-hud", { "omlxApiKey": "…" }]]
-import type { TextRenderable } from "@opentui/core"
+import type { RGBA, TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { appendFileSync } from "node:fs"
@@ -30,6 +30,7 @@ import type { SplashSample } from "./splash"
 import { fetchMlxServeRequests, mlxServeTurn } from "./mlxserve"
 import { turnRate, universalLine, tokensLabel, short, nn, ni } from "./universal"
 import type { Turn } from "./universal"
+import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import { VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples } from "./prometheus"
 import type { PromSpec, PromSample } from "./prometheus"
 
@@ -356,7 +357,7 @@ async function prometheusLine(
   base: string,
   label: string,
   model: string,
-  info: any,
+  info: AssistantMessage | undefined,
   turn?: Turn
 ): Promise<string | null> {
   const now = await fetchPromSample(base, spec)
@@ -399,7 +400,9 @@ function SidebarFooter(props: { api: Parameters<TuiPlugin>[0]; store: Store }) {
   }
   props.store.listeners.add(sync)
   onCleanup(() => props.store.listeners.delete(sync))
-  let fg: unknown = undefined
+  // theme.current.textMuted is typed RGBA and non-optional; the guard stays
+  // because this API is undocumented and has shifted before.
+  let fg: RGBA | undefined
   try {
     fg = props.api.theme?.current?.textMuted
   } catch {}
@@ -409,7 +412,7 @@ function SidebarFooter(props: { api: Parameters<TuiPlugin>[0]; store: Store }) {
         text = ref
         sync()
       }}
-      fg={fg as any}
+      fg={fg}
     >
       {props.store.text}
     </text>
@@ -469,7 +472,7 @@ const tui: TuiPlugin = async (api, options) => {
   }).catch(() => {})
 
   let lastKey = ""
-  const refresh = async (info: any, provider: string, model: string) => {
+  const refresh = async (info: AssistantMessage, provider: string, model: string) => {
     const key = `${provider}/${model}`
     if (key !== lastKey) {
       store.text = `${provider}  ${short(model)}\n…`
@@ -499,12 +502,14 @@ const tui: TuiPlugin = async (api, options) => {
       line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t)
     else if (provider === "lmdeploy")
       line = await prometheusLine("lmdeploy", LMDEPLOY_SPEC, cfg.lmdeployBase, "LMDeploy", model, info, t)
-    } catch (e: any) {
+    } catch (e: unknown) {
       // An adapter failing must never blank the panel: fall through to the
       // universal line. Silent for users, visible with OPENCODE_HUD_DEBUG —
       // a swallowed ReferenceError here once broke the MTPLX and oMLX
       // adapters for several commits without any visible symptom.
-      dbg(`${provider} adapter threw: ${e?.name}: ${e?.message}\n${e?.stack ?? ""}`)
+      // `unknown` forces this: a throw is not guaranteed to be an Error.
+      const err = e instanceof Error ? e : new Error(String(e))
+      dbg(`${provider} adapter threw: ${err.name}: ${err.message}\n${err.stack ?? ""}`)
     }
     if (!line) line = universalLine(provider, model, info, t)
     turns.delete(info.id)
@@ -517,7 +522,7 @@ const tui: TuiPlugin = async (api, options) => {
   const offs: Array<() => void> = []
   try {
     offs.push(
-      api.event.on("message.part.delta", (evt: any) => {
+      api.event.on("message.part.delta", (evt) => {
         const p = evt?.properties
         if (!p || (p.field !== "text" && p.field !== "reasoning")) return
         const id = p.messageID
@@ -530,7 +535,7 @@ const tui: TuiPlugin = async (api, options) => {
       })
     )
     offs.push(
-      api.event.on("message.updated", (evt: any) => {
+      api.event.on("message.updated", (evt) => {
         const info = evt?.properties?.info
         if (!info || info.role !== "assistant") return
         if (info.summary === true) return
@@ -569,7 +574,7 @@ const tui: TuiPlugin = async (api, options) => {
           return <SidebarFooter api={api} store={store} />
         },
       },
-    } as any)
+    })
   } catch {
     // registration failed; never crash the TUI over the HUD.
   }

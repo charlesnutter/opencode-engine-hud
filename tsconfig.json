@@ -9,7 +9,6 @@
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
   "include": [

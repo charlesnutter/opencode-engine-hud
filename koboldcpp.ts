@@ -74,22 +74,23 @@ export interface KoboldTurn {
   draftAcceptRate?: number
 }
 
-export function parseKoboldPerf(raw: any): KoboldPerf | null {
+export function parseKoboldPerf(raw: unknown): KoboldPerf | null {
   if (!raw || typeof raw !== "object") return null
+  const r = raw as Record<string, unknown>
   // total_gens is the one field that must be present and numeric: it is how a
   // stale sample is detected, and its absence means this is not /api/extra/perf.
-  if (typeof raw.total_gens !== "number") return null
-  const n = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
+  if (typeof r.total_gens !== "number") return null
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
   return {
-    last_input_count: n(raw.last_input_count),
-    last_token_count: n(raw.last_token_count),
-    last_process_time: n(raw.last_process_time),
-    last_eval_time: n(raw.last_eval_time),
-    last_process_speed: n(raw.last_process_speed),
-    last_eval_speed: n(raw.last_eval_speed),
-    last_draft_success: n(raw.last_draft_success),
-    last_draft_failed: n(raw.last_draft_failed),
-    total_gens: n(raw.total_gens),
+    last_input_count: n(r.last_input_count),
+    last_token_count: n(r.last_token_count),
+    last_process_time: n(r.last_process_time),
+    last_eval_time: n(r.last_eval_time),
+    last_process_speed: n(r.last_process_speed),
+    last_eval_speed: n(r.last_eval_speed),
+    last_draft_success: n(r.last_draft_success),
+    last_draft_failed: n(r.last_draft_failed),
+    total_gens: n(r.total_gens),
   }
 }
 

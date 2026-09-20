@@ -87,12 +87,14 @@ const NON_STREAM_RATIO = 0.99
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null)
 
-export function parseMlxServeRequests(raw: any): MlxServeRequest[] | null {
-  const list = raw?.requests
+export function parseMlxServeRequests(raw: unknown): MlxServeRequest[] | null {
+  const list = (raw as { requests?: unknown } | null | undefined)?.requests
   if (!Array.isArray(list)) return null // not this endpoint
   const out: MlxServeRequest[] = []
-  for (const r of list) {
-    if (!r || typeof r.request_id !== "string") continue
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue
+    const r = entry as Record<string, unknown>
+    if (typeof r.request_id !== "string") continue
     out.push({
       requestId: r.request_id,
       model: typeof r.model === "string" ? r.model : "",
