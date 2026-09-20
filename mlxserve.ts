@@ -21,6 +21,8 @@
 //
 // No JSX/solid-js imports, so it stays unit-testable (test/mlxserve.test.mjs).
 
+import { httpJson, type HttpOptions } from "./http"
+
 /** One record from /v1/metrics/requests, as the server names its fields. */
 export interface MlxServeRequest {
   requestId: string
@@ -152,23 +154,15 @@ export function mlxServeTurn(
 export async function fetchMlxServeRequests(
   base: string,
   model?: string,
-  apiKey?: string
+  apiKey?: string,
+  opts?: HttpOptions
 ): Promise<MlxServeRequest[] | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    // Note the /v1 prefix: /metrics/requests without it is a 404.
-    const q = new URLSearchParams({ last_n: "5" })
-    if (model) q.set("model", model)
-    const headers: Record<string, string> = { connection: "close" }
-    // MLX_API_KEY, when set on the server, guards every route on this router.
-    if (apiKey) headers.authorization = `Bearer ${apiKey}`
-    const res = await fetch(`${base}/v1/metrics/requests?${q}`, { signal: ctrl.signal, headers })
-    if (!res.ok) return null
-    return parseMlxServeRequests(await res.json())
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
+  // Note the /v1 prefix: /metrics/requests without it is a 404.
+  const q = new URLSearchParams({ last_n: "5" })
+  if (model) q.set("model", model)
+  // MLX_API_KEY, when set on the server, guards every route on this router.
+  const headers = apiKey ? { ...opts?.headers, authorization: `Bearer ${apiKey}` } : opts?.headers
+  return parseMlxServeRequests(
+    await httpJson(`${base}/v1/metrics/requests?${q}`, { ...opts, headers })
+  )
 }

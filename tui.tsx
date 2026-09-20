@@ -21,6 +21,7 @@
 //
 //   "plugin": [["@charlesnutter/opencode-hud", { "omlxApiKey": "…" }]]
 import type { RGBA, TextRenderable } from "@opentui/core"
+import { httpJson, httpText, type HttpOptions } from "./http"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { appendFileSync } from "node:fs"
@@ -65,15 +66,31 @@ function dbg(msg: string) {
 }
 
 // ---- Tier 2: MTPLX enrichment — /metrics `latest`, per-request precise ------
-async function mtplxLine(cfg: Config, model: string): Promise<string | null> {
-  const body = await getJson(cfg.mtplxUrl)
+/**
+ * The fields this plugin reads from MTPLX's `/metrics` `latest` receipt. The
+ * receipt carries several hundred more describing scheduler internals; these
+ * are the ones that reach the panel.
+ */
+interface MtplxLatest {
+  decode_tok_s?: number
+  prefill_tok_s?: number
+  ttft_s?: number
+  completion_tokens?: number
+  reasoning_tokens?: number | null
+  request_elapsed_s?: number
+  verify_calls?: number
+  mean_accept_probability_by_depth?: number[]
+}
+
+async function mtplxLine(cfg: Config, model: string, http: HttpOptions): Promise<string | null> {
+  const body = (await httpJson(cfg.mtplxUrl, http)) as { latest?: MtplxLatest } | null
   const l = body?.latest
   if (!l) return null
   let mtp = ""
   if (typeof l.verify_calls === "number" && l.verify_calls > 0 && typeof l.completion_tokens === "number") {
     const perPass = l.completion_tokens / l.verify_calls
     const acc = Array.isArray(l.mean_accept_probability_by_depth)
-      ? l.mean_accept_probability_by_depth.map((p: number) => Math.round(p * 100)).join("/")
+      ? l.mean_accept_probability_by_depth.map((p) => Math.round(p * 100)).join("/")
       : null
     mtp = `MTP ${nn(perPass, 2)}x${acc ? ` ${acc}%` : ""}`
   }
@@ -84,7 +101,9 @@ async function mtplxLine(cfg: Config, model: string): Promise<string | null> {
     `MTPLX  ${short(model)}`,
     `${nn(l.decode_tok_s)} tok/s  ttft ${nn(l.ttft_s, 2)}s`,
     `prefill ${ni(l.prefill_tok_s)} tok/s`,
-    `${tokensLabel(l.completion_tokens, reasoning)}  ${nn(l.request_elapsed_s, 2)}s`,
+    l.completion_tokens !== undefined
+      ? `${tokensLabel(l.completion_tokens, reasoning)}  ${nn(l.request_elapsed_s, 2)}s`
+      : "",
     mtp,
   ].filter(Boolean).join("\n")
 }
@@ -101,9 +120,24 @@ interface OmlxSample {
 }
 let omlxPrev: OmlxSample | undefined
 
-async function omlxSample(cfg: Config): Promise<OmlxSample | null> {
+/** The fields this plugin reads from oMLX's `/api/status`. */
+interface OmlxStatus {
+  total_requests?: number
+  total_prompt_tokens?: number
+  total_completion_tokens?: number
+  total_cached_tokens?: number
+  avg_generation_tps?: number
+  avg_prefill_tps?: number
+  loaded_models?: string[]
+  default_model?: string
+}
+
+async function omlxSample(cfg: Config, http: HttpOptions): Promise<OmlxSample | null> {
   if (!cfg.omlxKey) return null
-  const j = await getJson(`${cfg.omlxBase}/api/status`, { authorization: `Bearer ${cfg.omlxKey}` })
+  const j = (await httpJson(`${cfg.omlxBase}/api/status`, {
+    ...http,
+    headers: { ...http.headers, authorization: `Bearer ${cfg.omlxKey}` },
+  })) as OmlxStatus | null
   if (!j) return null
   return {
     requests: j.total_requests ?? 0,
@@ -116,8 +150,8 @@ async function omlxSample(cfg: Config): Promise<OmlxSample | null> {
   }
 }
 
-async function omlxLine(cfg: Config): Promise<string | null> {
-  const s = await omlxSample(cfg)
+async function omlxLine(cfg: Config, http: HttpOptions): Promise<string | null> {
+  const s = await omlxSample(cfg, http)
   if (!s) return null
   const prev = omlxPrev
   omlxPrev = s
@@ -157,34 +191,6 @@ interface LlamaCppCounters {
 }
 const llamacppPrev = new Map<string, LlamaCppCounters>()
 
-async function getJson(url: string, headers?: Record<string, string>): Promise<any | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, headers })
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
-}
-
-async function getText(url: string): Promise<string | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, headers: { connection: "close" } })
-    if (!res.ok) return null
-    return await res.text()
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
-}
-
 /** llama.cpp emits bare `name value` lines with no labels. */
 function parsePrometheus(text: string): Record<string, number> {
   const out: Record<string, number> = {}
@@ -199,8 +205,8 @@ function parsePrometheus(text: string): Record<string, number> {
   return out
 }
 
-async function llamacppCounters(base: string): Promise<LlamaCppCounters | null> {
-  const text = await getText(`${base}/metrics`)
+async function llamacppCounters(base: string, http: HttpOptions): Promise<LlamaCppCounters | null> {
+  const text = await httpText(`${base}/metrics`, http)
   if (text === null) return null
   const v = parsePrometheus(text)
   return {
@@ -215,9 +221,10 @@ async function llamacppLine(
   key: string,
   base: string,
   label: string,
-  model: string
+  model: string,
+  http: HttpOptions
 ): Promise<string | null> {
-  const now = await llamacppCounters(base)
+  const now = await llamacppCounters(base, http)
   if (!now) return null // unreachable, or started without --metrics
   const prev = llamacppPrev.get(key)
   llamacppPrev.set(key, now)
@@ -253,8 +260,8 @@ async function llamacppLine(
 // mlx-serve 0.1.0 on Apple Silicon.
 const mlxServePrevId = new Map<string, string>()
 
-async function mlxServeLine(cfg: Config, model: string): Promise<string | null> {
-  const recs = await fetchMlxServeRequests(cfg.mlxServeBase, model, cfg.mlxServeKey || undefined)
+async function mlxServeLine(cfg: Config, model: string, http: HttpOptions): Promise<string | null> {
+  const recs = await fetchMlxServeRequests(cfg.mlxServeBase, model, cfg.mlxServeKey || undefined, http)
   if (!recs) return null // unreachable, not mlx-serve, or the API key is wrong
   const t = mlxServeTurn(recs, mlxServePrevId.get(cfg.mlxServeBase))
   if (!t) return null // nothing newer than the record already reported
@@ -285,8 +292,8 @@ async function mlxServeLine(cfg: Config, model: string): Promise<string | null> 
 // drafting besides. Validated live against Splash 1.0 on Apple Silicon.
 const splashPrev = new Map<string, SplashSample>()
 
-async function splashLine(base: string, model: string): Promise<string | null> {
-  const now = await fetchSplashSample(base)
+async function splashLine(base: string, model: string, http: HttpOptions): Promise<string | null> {
+  const now = await fetchSplashSample(base, http)
   if (!now) return null // unreachable, or not a Splash server
   const prev = splashPrev.get(base)
   splashPrev.set(base, now)
@@ -318,8 +325,8 @@ async function splashLine(base: string, model: string): Promise<string | null> {
 // koboldcpp.ts). Validated live against KoboldCpp v1.121 on Apple Silicon.
 const koboldPrevGens = new Map<string, number>()
 
-async function koboldLine(base: string, model: string): Promise<string | null> {
-  const perf = await fetchKoboldPerf(base)
+async function koboldLine(base: string, model: string, http: HttpOptions): Promise<string | null> {
+  const perf = await fetchKoboldPerf(base, http)
   if (!perf) return null // unreachable, or not a KoboldCpp server
   const prev = koboldPrevGens.get(base)
   koboldPrevGens.set(base, perf.total_gens)
@@ -358,9 +365,10 @@ async function prometheusLine(
   label: string,
   model: string,
   info: AssistantMessage | undefined,
-  turn?: Turn
+  turn: Turn | undefined,
+  http: HttpOptions
 ): Promise<string | null> {
-  const now = await fetchPromSample(base, spec)
+  const now = await fetchPromSample(base, spec, http)
   if (!now) return null
   const prev = promPrev.get(providerId)
   promPrev.set(providerId, now)
@@ -461,13 +469,17 @@ const tui: TuiPlugin = async (api, options) => {
     return t
   }
 
-  omlxSample(cfg).then((s) => {
+  // Prime the diff baselines at startup so the first turn has something to
+  // subtract from. These fire before any turn, so they are the likeliest to be
+  // in flight if the plugin is disposed early — hence the lifecycle signal.
+  const startupHttp: HttpOptions = { signal: api.lifecycle.signal }
+  omlxSample(cfg, startupHttp).then((s) => {
     if (s) omlxPrev = s
   }).catch(() => {})
-  llamacppCounters(cfg.llamacppBase).then((c) => {
+  llamacppCounters(cfg.llamacppBase, startupHttp).then((c) => {
     if (c) llamacppPrev.set("llamacpp", c)
   }).catch(() => {})
-  llamacppCounters(cfg.llamafileBase).then((c) => {
+  llamacppCounters(cfg.llamafileBase, startupHttp).then((c) => {
     if (c) llamacppPrev.set("llamafile", c)
   }).catch(() => {})
 
@@ -480,28 +492,33 @@ const tui: TuiPlugin = async (api, options) => {
       lastKey = key
     }
     const t = turns.get(info.id)
+    // One signal for every fetch this turn: each request still has its own
+    // timeout, but disposing the plugin cancels all of them at once instead of
+    // leaving them to run out the clock.
+    const http: HttpOptions = { signal: api.lifecycle.signal }
+
     // Prefer richer per-engine enrichment; fall back to the universal line.
     let line: string | null = null
     try {
-    if (provider === "mtplx") line = await mtplxLine(cfg, model)
-    else if (provider === "omlx") line = await omlxLine(cfg)
-    else if (provider === "llamacpp") line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model)
+    if (provider === "mtplx") line = await mtplxLine(cfg, model, http)
+    else if (provider === "omlx") line = await omlxLine(cfg, http)
+    else if (provider === "llamacpp") line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model, http)
     // llamafile is llama.cpp-derived and publishes the identical metric names,
     // so it reuses this adapter verbatim — only the URL and baseline differ.
-    else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model)
-    else if (provider === "splash") line = await splashLine(cfg.splashBase, model)
+    else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model, http)
+    else if (provider === "splash") line = await splashLine(cfg.splashBase, model, http)
     else if (provider === "mlxserve" || provider === "mlx-serve")
-      line = await mlxServeLine(cfg, model)
+      line = await mlxServeLine(cfg, model, http)
     else if (provider === "koboldcpp" || provider === "kobold")
-      line = await koboldLine(cfg.koboldBase, model)
-    else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t)
-    else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t)
+      line = await koboldLine(cfg.koboldBase, model, http)
+    else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t, http)
+    else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t, http)
     else if (provider === "vllmmlx" || provider === "vllm-mlx")
-      line = await prometheusLine("vllmmlx", VLLM_MLX_SPEC, cfg.vllmMlxBase, "vllm-mlx", model, info, t)
+      line = await prometheusLine("vllmmlx", VLLM_MLX_SPEC, cfg.vllmMlxBase, "vllm-mlx", model, info, t, http)
     else if (provider === "aphrodite")
-      line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t)
+      line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t, http)
     else if (provider === "lmdeploy")
-      line = await prometheusLine("lmdeploy", LMDEPLOY_SPEC, cfg.lmdeployBase, "LMDeploy", model, info, t)
+      line = await prometheusLine("lmdeploy", LMDEPLOY_SPEC, cfg.lmdeployBase, "LMDeploy", model, info, t, http)
     } catch (e: unknown) {
       // An adapter failing must never blank the panel: fall through to the
       // universal line. Silent for users, visible with OPENCODE_HUD_DEBUG —

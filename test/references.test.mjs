@@ -107,7 +107,12 @@ test("tui.tsx: every local module it imports from actually exports those names",
   for (const m of s.matchAll(/import\s*\{([^}]*)\}\s*from\s*""/g)) void m // strings were stripped
   // Re-read unstripped to recover the module specifiers.
   for (const m of read("tui.tsx").matchAll(/import\s*\{([^}]*)\}\s*from\s*"\.\/(\w+)"/g)) {
-    const names = m[1].split(",").map((p) => p.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean)
+    // Strip the inline `type` modifier: `import { a, type B }` is valid and B
+    // is still an export to verify, just a type-only one.
+    const names = m[1]
+      .split(",")
+      .map((p) => p.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim())
+      .filter(Boolean)
     const mod = strip(read(`${m[2]}.ts`))
     for (const n of names) {
       const re = new RegExp(`export\\s+(?:async\\s+)?(?:function|const|let|var|interface|type|class)\\s+${n}\\b`)

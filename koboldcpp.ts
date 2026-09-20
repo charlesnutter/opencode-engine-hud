@@ -1,3 +1,5 @@
+import { httpJson, type HttpOptions } from "./http"
+
 // KoboldCpp enrichment — /api/extra/perf.
 //
 // A different shape from every other engine here. Prometheus engines publish
@@ -138,19 +140,9 @@ export function koboldTurn(now: KoboldPerf, prevTotalGens: number | undefined): 
   }
 }
 
-export async function fetchKoboldPerf(base: string): Promise<KoboldPerf | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    const res = await fetch(`${base}/api/extra/perf`, {
-      signal: ctrl.signal,
-      headers: { connection: "close" },
-    })
-    if (!res.ok) return null
-    return parseKoboldPerf(await res.json())
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
+export async function fetchKoboldPerf(
+  base: string,
+  opts?: HttpOptions
+): Promise<KoboldPerf | null> {
+  return parseKoboldPerf(await httpJson(`${base}/api/extra/perf`, opts))
 }

@@ -16,6 +16,7 @@
 // No JSX/solid-js imports, so it stays unit-testable (test/splash.test.mjs).
 
 import { sumLabeledMetric } from "./prometheus"
+import { httpText, type HttpOptions } from "./http"
 
 /**
  * Names verified against the server's own metrics.py (Splash 1.0), which maps
@@ -151,16 +152,10 @@ export function diffSplashSamples(prev: SplashSample, now: SplashSample): Splash
   }
 }
 
-export async function fetchSplashSample(base: string): Promise<SplashSample | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    const res = await fetch(`${base}/metrics`, { signal: ctrl.signal, headers: { connection: "close" } })
-    if (!res.ok) return null
-    return parseSplashSample(await res.text())
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
+export async function fetchSplashSample(
+  base: string,
+  opts?: HttpOptions
+): Promise<SplashSample | null> {
+  const text = await httpText(`${base}/metrics`, opts)
+  return text === null ? null : parseSplashSample(text)
 }

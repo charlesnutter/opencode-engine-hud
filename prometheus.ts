@@ -1,3 +1,5 @@
+import { httpText, type HttpOptions } from "./http"
+
 // Pure Prometheus scraping/parsing for the vLLM and SGLang enrichment tier.
 // No JSX, no OpenCode/solid-js imports — kept separate so it can be unit
 // tested (test/prometheus.test.mjs) without pulling in the TUI runtime, which
@@ -160,18 +162,13 @@ export function parsePromSample(text: string, spec: PromSpec): PromSample | null
   }
 }
 
-export async function fetchPromSample(base: string, spec: PromSpec): Promise<PromSample | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    const res = await fetch(`${base}/metrics`, { signal: ctrl.signal, headers: { connection: "close" } })
-    if (!res.ok) return null
-    return parsePromSample(await res.text(), spec)
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
+export async function fetchPromSample(
+  base: string,
+  spec: PromSpec,
+  opts?: HttpOptions
+): Promise<PromSample | null> {
+  const text = await httpText(`${base}/metrics`, opts)
+  return text === null ? null : parsePromSample(text, spec)
 }
 
 /**
