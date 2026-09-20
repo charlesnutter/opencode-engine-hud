@@ -63,6 +63,21 @@ export function parseLlamaCppCounters(text: string): LlamaCppCounters | null {
  * token advanced the counter (answered from cache faster than we sampled, or a
  * concurrent caller's turn beat us to it) or the counters ran backwards
  * because the server restarted.
+ *
+ * Freshness gap, structural and undocumented until now: llama.cpp's /metrics
+ * exposes no cumulative request-count field of any kind, checked directly
+ * against a live server's full metric list (`n_decode_total` is a decode-STEP
+ * counter close to but not equal to `predictedTokens`; `requests_processing`
+ * and `requests_deferred` are point-in-time gauges of in-flight state,
+ * confirmed both at 0 immediately after a completed request). Every other
+ * adapter in this codebase that can land more than one request in a
+ * sampling window has a total-requests-style counter to detect and label
+ * that (Splash's `requests`, oMLX's `total_requests`, the Prometheus
+ * engines' histogram counts via `ttftExact`). llama.cpp has nothing to key
+ * such a label off — if more than one generation completes between two
+ * samples, this silently sums them with no way to say so. Unlike the oMLX
+ * fallback this codebase fixed, there is no server-side data to fix it with;
+ * this is a known, permanent limitation of the endpoint, not an oversight.
  */
 export function diffLlamaCppCounters(
   prev: LlamaCppCounters,

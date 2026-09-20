@@ -94,6 +94,30 @@ test("a full cache hit reports no prefill rate", () => {
   assert.ok(t.decodeTokS > 0, "decode is unaffected")
 })
 
+// ---- E2/E4 audit: real timer-resolution and cache-hit edge cases -----------
+// Checked live against a running server whether a KoboldCpp-style timer-floor
+// bug (a short window quantising to an inflated rate) reproduces here. It
+// does not: the server itself reports exactly 0.0s for a single decoded
+// token — not a tiny nonzero value — and the existing `> 0` guard already
+// converts that correctly to "no rate" rather than Infinity or a huge number.
+test("a real 1-token decode reports exactly 0s, correctly yielding no rate", () => {
+  const b = parseLlamaCppCounters(fixture("llamacpp-minimal-before.prom"))
+  const a = parseLlamaCppCounters(fixture("llamacpp-minimal-after.prom"))
+  const t = diffLlamaCppCounters(b, a)
+  assert.equal(t.completionTokens, 1)
+  assert.equal(t.decodeS, 0, "the server itself reports this as exactly zero")
+  assert.equal(t.decodeTokS, undefined, "must not become Infinity or an inflated rate")
+})
+
+test("a near-total prefix-cache hit yields a plausible rate, not an absurd one", () => {
+  // usage reported cached_tokens: 40 of 41 prompt tokens -- only 1 recomputed.
+  const b = parseLlamaCppCounters(fixture("llamacpp-cachehit-before.prom"))
+  const a = parseLlamaCppCounters(fixture("llamacpp-cachehit-after.prom"))
+  const t = diffLlamaCppCounters(b, a)
+  assert.equal(t.promptTokens, 1)
+  assert.ok(t.prefillTokS > 0 && t.prefillTokS < 5000, `expected a plausible rate, got ${t.prefillTokS}`)
+})
+
 // ---- rendering --------------------------------------------------------------
 test("renders four lines, labelled for whichever server it is", () => {
   const t = diffLlamaCppCounters(before, after)
