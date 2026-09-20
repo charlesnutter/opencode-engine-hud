@@ -58,6 +58,16 @@ interface Config {
  * otherwise invisible; this is how you see them.
  */
 const HUD_DEBUG = !!process.env.OPENCODE_HUD_DEBUG
+/** Audit B5 helper: shallow, safe description of whatever the slot is passed. */
+function describeSlotArgs(args: unknown[]): string {
+  if (args.length === 0) return "none"
+  return args
+    .map((a) =>
+      a && typeof a === "object" ? `{${Object.keys(a as object).join(",")}}` : String(a)
+    )
+    .join(" | ")
+}
+
 function dbg(msg: string) {
   if (!HUD_DEBUG) return
   try {
@@ -407,7 +417,12 @@ function SidebarFooter(props: { api: Parameters<TuiPlugin>[0]; store: Store }) {
     } catch {}
   }
   props.store.listeners.add(sync)
-  onCleanup(() => props.store.listeners.delete(sync))
+  // Audit C2: a listener left behind on unmount accumulates one per mount.
+  dbg(`component mounted: ${props.store.listeners.size} store listener(s)`)
+  onCleanup(() => {
+    props.store.listeners.delete(sync)
+    dbg(`component unmounted: ${props.store.listeners.size} store listener(s) remain`)
+  })
   // theme.current.textMuted is typed RGBA and non-optional; the guard stays
   // because this API is undocumented and has shifted before.
   let fg: RGBA | undefined
@@ -463,7 +478,12 @@ const tui: TuiPlugin = async (api, options) => {
       if (turns.size > 64) {
         // Bound the map; drop the oldest insertion.
         const first = turns.keys().next().value
-        if (first && first !== id) turns.delete(first)
+        if (first && first !== id) {
+          turns.delete(first)
+          // Audit C3: eviction only fires if turns are being left behind —
+          // normally each is deleted when its turn completes.
+          dbg(`turns: evicted ${first}, size now ${turns.size}`)
+        }
       }
     }
     return t
@@ -532,6 +552,8 @@ const tui: TuiPlugin = async (api, options) => {
     turns.delete(info.id)
     if (line) {
       store.text = line
+      // Audit B6: compare this against what the sidebar actually displays.
+      dbg(`rendered ${line.split("\n").length} line(s) for ${provider}`)
       bump()
     }
   }
@@ -576,18 +598,29 @@ const tui: TuiPlugin = async (api, options) => {
 
   try {
     api.lifecycle?.onDispose?.(() => {
+      // Audit C1: proves dispose fires at all, and that every subscription is
+      // released rather than outliving the plugin.
+      dbg(`dispose: releasing ${offs.length} listener(s)`)
+      let released = 0
       for (const off of offs) {
         try {
           off()
-        } catch {}
+          released++
+        } catch (e: unknown) {
+          dbg(`dispose: unsubscribe threw: ${e instanceof Error ? e.message : String(e)}`)
+        }
       }
+      dbg(`dispose: released ${released}/${offs.length}`)
     })
   } catch {}
 
   try {
     api.slots.register({
       slots: {
-        sidebar_footer() {
+        // Audit B5: the registry passes (ctx, props) to slot handlers. We
+        // ignore both; this records whether anything useful is being dropped.
+        sidebar_footer(...args: unknown[]) {
+          if (HUD_DEBUG) dbg(`slot sidebar_footer args: ${describeSlotArgs(args)}`)
           return <SidebarFooter api={api} store={store} />
         },
       },
