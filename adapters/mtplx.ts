@@ -14,8 +14,8 @@
 // Split out of tui.tsx so the formatting is testable; it was the last adapter
 // whose output nothing could assert against.
 
-import { httpJson, type HttpOptions } from "./http"
-import { nn, ni, short, tokensLabel } from "./universal"
+import { httpJson, type HttpOptions } from "../http"
+import { nn, ni, short, tokensLabel } from "../universal"
 
 /**
  * The fields this plugin reads. All optional — see the note above about

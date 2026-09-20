@@ -106,7 +106,9 @@ test("tui.tsx: every local module it imports from actually exports those names",
   const problems = []
   for (const m of s.matchAll(/import\s*\{([^}]*)\}\s*from\s*""/g)) void m // strings were stripped
   // Re-read unstripped to recover the module specifiers.
-  for (const m of read("tui.tsx").matchAll(/import\s*\{([^}]*)\}\s*from\s*"\.\/(\w+)"/g)) {
+    // The specifier may be nested (./adapters/omlx). Matching only \w+ would
+  // skip those silently — a guard that quietly stops guarding.
+  for (const m of read("tui.tsx").matchAll(/import\s*\{([^}]*)\}\s*from\s*"\.\/((?:\w+\/)*\w+)"/g)) {
     // Strip the inline `type` modifier: `import { a, type B }` is valid and B
     // is still an export to verify, just a type-only one.
     const names = m[1]

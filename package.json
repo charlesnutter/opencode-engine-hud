@@ -51,12 +51,7 @@
     "tui.tsx",
     "http.ts",
     "universal.ts",
-    "mtplx.ts",
-    "omlx.ts",
-    "prometheus.ts",
-    "koboldcpp.ts",
-    "splash.ts",
-    "mlxserve.ts",
+    "adapters/",
     "README.md",
     "LICENSE"
   ],

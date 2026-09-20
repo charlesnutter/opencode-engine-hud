@@ -7,7 +7,7 @@
 // as if measured.
 // Run with: bun test/omlx.test.mjs
 import { strict as assert } from "node:assert"
-import { recoverLatest, formatOmlxLine, toOmlxSample } from "../omlx.ts"
+import { recoverLatest, formatOmlxLine, toOmlxSample } from "../adapters/omlx.ts"
 
 let passed = 0
 function test(name, fn) {

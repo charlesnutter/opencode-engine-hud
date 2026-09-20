@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
-import { parseKoboldPerf, koboldTurn } from "../koboldcpp.ts"
+import { parseKoboldPerf, koboldTurn } from "../adapters/koboldcpp.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const raw = (name) => JSON.parse(readFileSync(path.join(dir, "..", "fixtures", name), "utf8"))

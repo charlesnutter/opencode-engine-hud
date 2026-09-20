@@ -21,7 +21,7 @@
 //
 // No JSX/solid-js imports, so it stays unit-testable (test/mlxserve.test.mjs).
 
-import { httpJson, type HttpOptions } from "./http"
+import { httpJson, type HttpOptions } from "../http"
 
 /** One record from /v1/metrics/requests, as the server names its fields. */
 export interface MlxServeRequest {

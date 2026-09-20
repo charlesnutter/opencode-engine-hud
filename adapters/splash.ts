@@ -16,7 +16,7 @@
 // No JSX/solid-js imports, so it stays unit-testable (test/splash.test.mjs).
 
 import { sumLabeledMetric } from "./prometheus"
-import { httpText, type HttpOptions } from "./http"
+import { httpText, type HttpOptions } from "../http"
 
 /**
  * Names verified against the server's own metrics.py (Splash 1.0), which maps

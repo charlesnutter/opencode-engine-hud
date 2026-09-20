@@ -20,7 +20,7 @@ import {
   APHRODITE_SPEC,
   VLLM_MLX_SPEC,
   LMDEPLOY_SPEC,
-} from "../prometheus.ts"
+} from "../adapters/prometheus.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const fixture = (name) => readFileSync(path.join(dir, "..", "fixtures", name), "utf8")

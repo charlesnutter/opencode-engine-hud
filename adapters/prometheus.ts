@@ -1,4 +1,4 @@
-import { httpText, type HttpOptions } from "./http"
+import { httpText, type HttpOptions } from "../http"
 
 // Pure Prometheus scraping/parsing for the vLLM and SGLang enrichment tier.
 // No JSX, no OpenCode/solid-js imports — kept separate so it can be unit

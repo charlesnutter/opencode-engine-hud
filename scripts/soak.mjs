@@ -24,11 +24,11 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 
-import { parsePromSample, diffPromSamples, SGLANG_SPEC, VLLM_SPEC } from "../prometheus.ts"
-import { parseSplashSample, diffSplashSamples } from "../splash.ts"
-import { parseKoboldPerf, koboldTurn } from "../koboldcpp.ts"
-import { parseMlxServeRequests, mlxServeTurn } from "../mlxserve.ts"
-import { formatMtplxLine } from "../mtplx.ts"
+import { parsePromSample, diffPromSamples, SGLANG_SPEC, VLLM_SPEC } from "../adapters/prometheus.ts"
+import { parseSplashSample, diffSplashSamples } from "../adapters/splash.ts"
+import { parseKoboldPerf, koboldTurn } from "../adapters/koboldcpp.ts"
+import { parseMlxServeRequests, mlxServeTurn } from "../adapters/mlxserve.ts"
+import { formatMtplxLine } from "../adapters/mtplx.ts"
 import { turnRate, universalLine } from "../universal.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))

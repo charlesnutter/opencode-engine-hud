@@ -13,7 +13,7 @@
 // this module exists to prevent: a placeholder where a measurement belongs.
 // Run with: bun test/mtplx.test.mjs
 import { strict as assert } from "node:assert"
-import { formatMtplxLine } from "../mtplx.ts"
+import { formatMtplxLine } from "../adapters/mtplx.ts"
 
 let passed = 0
 function test(name, fn) {

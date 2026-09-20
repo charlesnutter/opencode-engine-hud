@@ -1,4 +1,4 @@
-import { httpJson, type HttpOptions } from "./http"
+import { httpJson, type HttpOptions } from "../http"
 
 // KoboldCpp enrichment — /api/extra/perf.
 //

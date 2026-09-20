@@ -21,8 +21,8 @@
 // testable — it was the last adapter whose formatting nothing could assert
 // against, which is the gap that hid two earlier bugs.
 
-import { httpJson, type HttpOptions } from "./http"
-import { nn, ni, short } from "./universal"
+import { httpJson, type HttpOptions } from "../http"
+import { nn, ni, short } from "../universal"
 
 /** Cumulative counters as this plugin reads them. */
 export interface OmlxSample {

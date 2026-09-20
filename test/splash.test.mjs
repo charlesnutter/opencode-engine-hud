@@ -7,7 +7,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
-import { parseSplashSample, diffSplashSamples } from "../splash.ts"
+import { parseSplashSample, diffSplashSamples } from "../adapters/splash.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const fixture = (name) => readFileSync(path.join(dir, "..", "fixtures", name), "utf8")
