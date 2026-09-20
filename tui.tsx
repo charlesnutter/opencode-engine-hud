@@ -23,6 +23,8 @@
 import type { RGBA, TextRenderable } from "@opentui/core"
 import { httpJson, httpText, type HttpOptions } from "./http"
 import { fetchMtplxLatest, formatMtplxLine } from "./mtplx"
+import { fetchOmlxSample, formatOmlxLine } from "./omlx"
+import type { OmlxSample } from "./omlx"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { appendFileSync } from "node:fs"
@@ -83,69 +85,15 @@ async function mtplxLine(cfg: Config, model: string, http: HttpOptions): Promise
 }
 
 // ---- Tier 2: oMLX enrichment — /api/status, differenced across the turn -----
-interface OmlxSample {
-  requests: number
-  prompt: number
-  completion: number
-  cached: number
-  avgGen: number
-  avgPrefill: number
-  model?: string
-}
+// Baseline only; the recovery arithmetic and formatting live in omlx.ts.
 let omlxPrev: OmlxSample | undefined
 
-/** The fields this plugin reads from oMLX's `/api/status`. */
-interface OmlxStatus {
-  total_requests?: number
-  total_prompt_tokens?: number
-  total_completion_tokens?: number
-  total_cached_tokens?: number
-  avg_generation_tps?: number
-  avg_prefill_tps?: number
-  loaded_models?: string[]
-  default_model?: string
-}
-
-async function omlxSample(cfg: Config, http: HttpOptions): Promise<OmlxSample | null> {
-  if (!cfg.omlxKey) return null
-  const j = (await httpJson(`${cfg.omlxBase}/api/status`, {
-    ...http,
-    headers: { ...http.headers, authorization: `Bearer ${cfg.omlxKey}` },
-  })) as OmlxStatus | null
-  if (!j) return null
-  return {
-    requests: j.total_requests ?? 0,
-    prompt: j.total_prompt_tokens ?? 0,
-    completion: j.total_completion_tokens ?? 0,
-    cached: j.total_cached_tokens ?? 0,
-    avgGen: j.avg_generation_tps ?? 0,
-    avgPrefill: j.avg_prefill_tps ?? 0,
-    model: j.loaded_models?.[0] ?? j.default_model,
-  }
-}
-
 async function omlxLine(cfg: Config, http: HttpOptions): Promise<string | null> {
-  const s = await omlxSample(cfg, http)
-  if (!s) return null
+  const now = await fetchOmlxSample(cfg.omlxBase, cfg.omlxKey, http)
+  if (!now) return null
   const prev = omlxPrev
-  omlxPrev = s
-  if (!prev || prev.model !== s.model || s.requests <= prev.requests) {
-    return [`oMLX  ${short(s.model ?? "")}`, `${nn(s.avgGen)} tok/s (server avg)`, `prefill ${ni(s.avgPrefill)} tok/s (avg)`]
-      .join("\n")
-  }
-  const dReq = s.requests - prev.requests
-  const comp = s.completion - prev.completion
-  let decode = dReq === 1 ? s.avgGen * s.requests - prev.avgGen * prev.requests : NaN
-  let prefill = dReq === 1 ? s.avgPrefill * s.requests - prev.avgPrefill * prev.requests : NaN
-  if (!(decode > 0)) decode = s.avgGen
-  if (!(prefill > 0)) prefill = s.avgPrefill
-  const cached = s.cached - prev.cached
-  return [
-    `oMLX  ${short(s.model ?? "")}`,
-    `${nn(decode)} tok/s`,
-    `prefill ${ni(prefill)} tok/s`,
-    `${ni(comp)} tok  (${ni(s.prompt - prev.prompt)} prompt${cached > 0 ? `, ${ni(cached)} cached` : ""})`,
-  ].join("\n")
+  omlxPrev = now
+  return formatOmlxLine(now, prev)
 }
 
 // ---- Tier 2: llama.cpp enrichment — /metrics, differenced across the turn --
@@ -457,7 +405,7 @@ const tui: TuiPlugin = async (api, options) => {
   // subtract from. These fire before any turn, so they are the likeliest to be
   // in flight if the plugin is disposed early — hence the lifecycle signal.
   const startupHttp: HttpOptions = { signal: api.lifecycle.signal }
-  omlxSample(cfg, startupHttp).then((s) => {
+  fetchOmlxSample(cfg.omlxBase, cfg.omlxKey, startupHttp).then((s) => {
     if (s) omlxPrev = s
   }).catch(() => {})
   llamacppCounters(cfg.llamacppBase, startupHttp).then((c) => {
