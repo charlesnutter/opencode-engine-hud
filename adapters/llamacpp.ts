@@ -21,7 +21,7 @@
 
 import { sumLabeledMetric } from "../prometheus-text"
 import { httpText, type HttpOptions } from "../http"
-import { nn, ni, short } from "../universal"
+import { nn, ni, short } from "../format"
 
 export interface LlamaCppCounters {
   promptTokens: number

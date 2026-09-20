@@ -15,7 +15,7 @@
 // whose output nothing could assert against.
 
 import { httpJson, type HttpOptions } from "../http"
-import { nn, ni, short, tokensLabel } from "../universal"
+import { nn, ni, short, tokensLabel } from "../format"
 
 /**
  * The fields this plugin reads. All optional — see the note above about

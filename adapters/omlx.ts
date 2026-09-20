@@ -22,7 +22,7 @@
 // against, which is the gap that hid two earlier bugs.
 
 import { httpJson, type HttpOptions } from "../http"
-import { nn, ni, short } from "../universal"
+import { nn, ni, short } from "../format"
 
 /** Cumulative counters as this plugin reads them. */
 export interface OmlxSample {
