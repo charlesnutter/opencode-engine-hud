@@ -18,19 +18,6 @@ export function short(model: string): string {
   return tail.length > 24 ? tail.slice(0, 23) + "…" : tail
 }
 
-async function getJson(url: string, headers?: Record<string, string>): Promise<any | null> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 2500)
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, headers })
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  } finally {
-    clearTimeout(t)
-  }
-}
 
 /**
  * The one place token counts are rendered, so every tier reads the same:

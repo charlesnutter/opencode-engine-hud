@@ -23,6 +23,7 @@
 import type { TextRenderable } from "@opentui/core"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
+import { appendFileSync } from "node:fs"
 import { fetchKoboldPerf, koboldTurn } from "./koboldcpp"
 import { fetchSplashSample, diffSplashSamples, SplashSample } from "./splash"
 import { fetchMlxServeRequests, mlxServeTurn } from "./mlxserve"
@@ -44,6 +45,19 @@ interface Config {
   splashBase: string
   mlxServeBase: string
   mlxServeKey: string
+}
+
+/**
+ * Diagnostics, off unless OPENCODE_HUD_DEBUG is set. Adapter failures are
+ * caught so a broken engine never blanks the panel, which means they are
+ * otherwise invisible; this is how you see them.
+ */
+const HUD_DEBUG = !!process.env.OPENCODE_HUD_DEBUG
+function dbg(msg: string) {
+  if (!HUD_DEBUG) return
+  try {
+    appendFileSync("/tmp/opencode-hud-debug.log", `${new Date().toISOString()} ${msg}\n`)
+  } catch {}
 }
 
 // ---- Tier 2: MTPLX enrichment — /metrics `latest`, per-request precise ------
@@ -138,6 +152,20 @@ interface LlamaCppCounters {
   predictedSeconds: number
 }
 const llamacppPrev = new Map<string, LlamaCppCounters>()
+
+async function getJson(url: string, headers?: Record<string, string>): Promise<any | null> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 2500)
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, headers })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  } finally {
+    clearTimeout(t)
+  }
+}
 
 async function getText(url: string): Promise<string | null> {
   const ctrl = new AbortController()
@@ -448,6 +476,7 @@ const tui: TuiPlugin = async (api, options) => {
     const t = turns.get(info.id)
     // Prefer richer per-engine enrichment; fall back to the universal line.
     let line: string | null = null
+    try {
     if (provider === "mtplx") line = await mtplxLine(cfg, model)
     else if (provider === "omlx") line = await omlxLine(cfg)
     else if (provider === "llamacpp") line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model)
@@ -467,6 +496,13 @@ const tui: TuiPlugin = async (api, options) => {
       line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t)
     else if (provider === "lmdeploy")
       line = await prometheusLine("lmdeploy", LMDEPLOY_SPEC, cfg.lmdeployBase, "LMDeploy", model, info, t)
+    } catch (e: any) {
+      // An adapter failing must never blank the panel: fall through to the
+      // universal line. Silent for users, visible with OPENCODE_HUD_DEBUG —
+      // a swallowed ReferenceError here once broke the MTPLX and oMLX
+      // adapters for several commits without any visible symptom.
+      dbg(`${provider} adapter threw: ${e?.name}: ${e?.message}\n${e?.stack ?? ""}`)
+    }
     if (!line) line = universalLine(provider, model, info, t)
     turns.delete(info.id)
     if (line) {
