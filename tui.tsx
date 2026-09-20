@@ -463,6 +463,19 @@ const tui: TuiPlugin = async (api, options) => {
   } catch {}
 
   try {
+    // Audit B2: the registry contract (SlotRegistry.register in
+    // @opentui/core/plugins/registry.d.ts) is `{ id, order?, setup?, dispose?,
+    // slots }`. `id` is forbidden here (TuiSlotPlugin types it `never`; the
+    // host assigns it) and `TuiSlots.register()` returns only that id as a
+    // string, with no matching `unregister` exposed on `api.slots` — so
+    // `dispose` on the plugin object is the ONLY hook we get for whatever the
+    // host does with our registration (its own reload, `registry.clear()`,
+    // or an explicit unregister). We were omitting it entirely, meaning any
+    // registry-driven teardown of this slot was silently a no-op on our side.
+    // `setup` is skipped deliberately: our init already runs above, before
+    // this call. `order` is left unset (defaults to 0): nothing here composes
+    // with another plugin's `sidebar_footer`, so there is no ordering to
+    // express yet.
     api.slots.register({
       slots: {
         // Audit B5: the registry passes (ctx, props) to slot handlers. We
@@ -471,6 +484,16 @@ const tui: TuiPlugin = async (api, options) => {
           if (HUD_DEBUG) dbg(`slot sidebar_footer args: ${describeSlotArgs(args)}`)
           return <SidebarFooter api={api} store={store} />
         },
+      },
+      dispose() {
+        // Audit B2/C8: fires only if the host unregisters or clears this slot
+        // plugin independently of api.lifecycle.onDispose (e.g. a hot reload
+        // that re-runs tui() without a matching lifecycle dispose first). If
+        // OPENCODE_HUD_DEBUG ever shows lifecycle dispose (C1) firing without
+        // this, or this firing without it, the two teardown paths have
+        // drifted apart and a stale closure over this load's api/store is
+        // the risk — same failure shape as C8.
+        dbg("slot sidebar_footer: registry dispose fired")
       },
     })
   } catch {
