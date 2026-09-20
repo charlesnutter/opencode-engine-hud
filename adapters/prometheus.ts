@@ -1,11 +1,13 @@
-import { httpText, type HttpOptions } from "../http"
-import { sumLabeledMetric } from "../prometheus-text"
-
-// Pure Prometheus scraping/parsing for the vLLM and SGLang enrichment tier.
+// Labelled-counter engines — vLLM, SGLang, vllm-mlx, Aphrodite, LMDeploy.
+//
+// What each engine calls its counters, and what a turn means once they are
+// differenced. Reading the text itself is prometheus-text.ts.
 // No JSX, no OpenCode/solid-js imports — kept separate so it can be unit
 // tested (test/prometheus.test.mjs) without pulling in the TUI runtime, which
 // isn't installed locally (OpenCode provides it at load time).
 
+import { httpText, type HttpOptions } from "../http"
+import { sumLabeledMetric } from "../prometheus-text"
 export interface PromSpec {
   prefix: string
   promptTokens: string

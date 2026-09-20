@@ -1,5 +1,3 @@
-import { httpJson, type HttpOptions } from "../http"
-
 // KoboldCpp enrichment — /api/extra/perf.
 //
 // A different shape from every other engine here. Prometheus engines publish
@@ -17,6 +15,7 @@ import { httpJson, type HttpOptions } from "../http"
 // No JSX/solid-js imports, so it stays unit-testable (test/koboldcpp.test.mjs)
 // without the TUI runtime.
 
+import { httpJson, type HttpOptions } from "../http"
 /**
  * The fields of /api/extra/perf this plugin reads. The endpoint returns more
  * (image/TTS/transcription counters, horde bookkeeping, seeds) that describe
