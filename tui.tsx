@@ -22,6 +22,7 @@
 //   "plugin": [["@charlesnutter/opencode-hud", { "omlxApiKey": "…" }]]
 import type { RGBA, TextRenderable } from "@opentui/core"
 import { httpJson, httpText, type HttpOptions } from "./http"
+import { fetchMtplxLatest, formatMtplxLine } from "./mtplx"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { appendFileSync } from "node:fs"
@@ -76,46 +77,9 @@ function dbg(msg: string) {
 }
 
 // ---- Tier 2: MTPLX enrichment — /metrics `latest`, per-request precise ------
-/**
- * The fields this plugin reads from MTPLX's `/metrics` `latest` receipt. The
- * receipt carries several hundred more describing scheduler internals; these
- * are the ones that reach the panel.
- */
-interface MtplxLatest {
-  decode_tok_s?: number
-  prefill_tok_s?: number
-  ttft_s?: number
-  completion_tokens?: number
-  reasoning_tokens?: number | null
-  request_elapsed_s?: number
-  verify_calls?: number
-  mean_accept_probability_by_depth?: number[]
-}
-
 async function mtplxLine(cfg: Config, model: string, http: HttpOptions): Promise<string | null> {
-  const body = (await httpJson(cfg.mtplxUrl, http)) as { latest?: MtplxLatest } | null
-  const l = body?.latest
-  if (!l) return null
-  let mtp = ""
-  if (typeof l.verify_calls === "number" && l.verify_calls > 0 && typeof l.completion_tokens === "number") {
-    const perPass = l.completion_tokens / l.verify_calls
-    const acc = Array.isArray(l.mean_accept_probability_by_depth)
-      ? l.mean_accept_probability_by_depth.map((p) => Math.round(p * 100)).join("/")
-      : null
-    mtp = `MTP ${nn(perPass, 2)}x${acc ? ` ${acc}%` : ""}`
-  }
-  // MTPLX follows the OpenAI convention: completion_tokens already INCLUDES
-  // reasoning_tokens, so it is the topline as-is (see tokensLabel).
-  const reasoning = typeof l.reasoning_tokens === "number" ? l.reasoning_tokens : 0
-  return [
-    `MTPLX  ${short(model)}`,
-    `${nn(l.decode_tok_s)} tok/s  ttft ${nn(l.ttft_s, 2)}s`,
-    `prefill ${ni(l.prefill_tok_s)} tok/s`,
-    l.completion_tokens !== undefined
-      ? `${tokensLabel(l.completion_tokens, reasoning)}  ${nn(l.request_elapsed_s, 2)}s`
-      : "",
-    mtp,
-  ].filter(Boolean).join("\n")
+  const latest = await fetchMtplxLatest(cfg.mtplxUrl, http)
+  return latest ? formatMtplxLine(latest, model) : null
 }
 
 // ---- Tier 2: oMLX enrichment — /api/status, differenced across the turn -----

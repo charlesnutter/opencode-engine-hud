@@ -50,9 +50,10 @@
   "files": [
     "tui.tsx",
     "http.ts",
+    "universal.ts",
+    "mtplx.ts",
     "prometheus.ts",
     "koboldcpp.ts",
-    "universal.ts",
     "splash.ts",
     "mlxserve.ts",
     "README.md",
@@ -60,6 +61,6 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && bun test/http.test.mjs && bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/universal.test.mjs && bun test/splash.test.mjs && bun test/mlxserve.test.mjs && bun test/references.test.mjs"
+    "test": "npm run typecheck && bun test/http.test.mjs && bun test/universal.test.mjs && bun test/mtplx.test.mjs && bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/splash.test.mjs && bun test/mlxserve.test.mjs && bun test/references.test.mjs"
   }
 }
