@@ -209,9 +209,19 @@ export function diffPromSamples(prev: PromSample, now: PromSample): PromDiff | n
   let decodeTokS: number | undefined
   let prefillTokS: number | undefined
 
-  // Best case: the engine timed decode as its own phase (LMDeploy).
+  // Best case: the engine timed decode as its own phase (LMDeploy). Requires
+  // `exact` too, not just its own histogram count: `completionTokens` is the
+  // WHOLE WINDOW's generation delta, not scoped to whichever single request
+  // advanced decodeTimeCount. If two requests land in a window and only one
+  // of them records a decode-time observation — plausible on an errored or
+  // partial completion — dDecCount===1 alone would divide both requests'
+  // tokens by one request's decode time. Confirmed reproducible: a window
+  // with 400 generation tokens (2 requests) and one 2.0s decode-time sample
+  // reported 200 tok/s instead of the true 100, silently 2x inflated,
+  // because `exact` (already computed from the TTFT count every engine here
+  // publishes) was never consulted for this branch.
   const dDecCount = now.decodeTimeCount - prev.decodeTimeCount
-  if (dDecCount === 1) {
+  if (exact && dDecCount === 1) {
     const decodeS = now.decodeTimeSum - prev.decodeTimeSum
     if (decodeS > 0) decodeTokS = completionTokens / decodeS
   }
@@ -229,8 +239,11 @@ export function diffPromSamples(prev: PromSample, now: PromSample): PromDiff | n
       decodeTokS = completionTokens / decodeWindow
     }
   }
+  // Same reasoning as decode above: exact is required, not just this
+  // histogram's own count, or promptTokens (the whole window's prefill
+  // delta) can get divided by a single request's prefill time.
   const dPreCount = now.prefillTimeCount - prev.prefillTimeCount
-  if (dPreCount === 1 && promptTokens > 0) {
+  if (exact && dPreCount === 1 && promptTokens > 0) {
     const prefillS = now.prefillTimeSum - prev.prefillTimeSum
     if (prefillS > 0) prefillTokS = promptTokens / prefillS
   }

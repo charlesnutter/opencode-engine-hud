@@ -247,6 +247,45 @@ test("LMDeploy: engine-timed decode wins over the duration-minus-TTFT fallback",
   assert.ok(Math.abs(diff.decodeTokS - 200 / (2.5 - 0.25)) > 1, "must not be the fallback")
 })
 
+test("LMDeploy: two requests with only one decode-time sample drops the rate, not just the exact flag", () => {
+  // Reproduces a real gap found in E2 review: completionTokens is the WHOLE
+  // WINDOW's generation delta. If two requests land but only one records a
+  // decode-time histogram observation (plausible on a partial/errored
+  // completion), dividing the window's full token count by that one
+  // request's decode time silently inflates the rate — confirmed before this
+  // guard existed: 400 window tokens / one request's 2.0s decode time
+  // reported 200 tok/s instead of the true 100.
+  const before = parsePromSample(fixture("lmdeploy-before.prom"), LMDEPLOY_SPEC)
+  const realAfter = parsePromSample(fixture("lmdeploy-after.prom"), LMDEPLOY_SPEC)
+  const now = {
+    ...realAfter,
+    generation: before.generation + 400, // two requests' worth
+    ttftCount: before.ttftCount + 2, // two requests landed
+    ttftSum: before.ttftSum + 0.5,
+    // decodeTimeCount/Sum left as realAfter's: still only +1 sample.
+  }
+  const diff = diffPromSamples(before, now)
+  assert.ok(diff)
+  assert.equal(diff.ttftExact, false)
+  assert.equal(diff.completionTokens, 400, "the token count itself is still exact for the window")
+  assert.equal(diff.decodeTokS, undefined, "must not divide the whole window by one request's decode time")
+})
+
+test("LMDeploy: the same guard applies to the prefill-time branch", () => {
+  const before = parsePromSample(fixture("lmdeploy-before.prom"), LMDEPLOY_SPEC)
+  const realAfter = parsePromSample(fixture("lmdeploy-after.prom"), LMDEPLOY_SPEC)
+  const now = {
+    ...realAfter,
+    prompt: before.prompt + 240, // two requests' worth of prompt tokens
+    ttftCount: before.ttftCount + 2,
+    ttftSum: before.ttftSum + 0.5,
+    // prefillTimeCount/Sum left as realAfter's: still only +1 sample.
+  }
+  const diff = diffPromSamples(before, now)
+  assert.equal(diff.ttftExact, false)
+  assert.equal(diff.prefillTokS, undefined, "must not divide the whole window by one request's prefill time")
+})
+
 test("vLLM keeps no prefill rate (it times no prefill phase)", () => {
   const before = parsePromSample(fixture("vllm-metal-before.prom"), VLLM_SPEC)
   const now = parsePromSample(fixture("vllm-metal-after.prom"), VLLM_SPEC)
