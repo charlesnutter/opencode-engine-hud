@@ -25,10 +25,13 @@ import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { appendFileSync } from "node:fs"
 import { fetchKoboldPerf, koboldTurn } from "./koboldcpp"
-import { fetchSplashSample, diffSplashSamples, SplashSample } from "./splash"
+import { fetchSplashSample, diffSplashSamples } from "./splash"
+import type { SplashSample } from "./splash"
 import { fetchMlxServeRequests, mlxServeTurn } from "./mlxserve"
-import { Turn, turnRate, universalLine, tokensLabel, short, nn, ni } from "./universal"
-import { PromSpec, VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples, PromSample } from "./prometheus"
+import { turnRate, universalLine, tokensLabel, short, nn, ni } from "./universal"
+import type { Turn } from "./universal"
+import { VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples } from "./prometheus"
+import type { PromSpec, PromSample } from "./prometheus"
 
 interface Config {
   mtplxUrl: string

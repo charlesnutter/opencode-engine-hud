@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": ">=1.18.20",
+    "@types/node": "^22.0.0",
     "typescript": "^5.6.0"
   },
   "files": [
@@ -57,6 +58,6 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/universal.test.mjs && bun test/splash.test.mjs && bun test/mlxserve.test.mjs && bun test/references.test.mjs"
+    "test": "npm run typecheck && bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/universal.test.mjs && bun test/splash.test.mjs && bun test/mlxserve.test.mjs && bun test/references.test.mjs"
   }
 }

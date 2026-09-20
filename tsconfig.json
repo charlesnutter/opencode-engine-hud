@@ -12,5 +12,8 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["tui.tsx"]
+  "include": [
+    "*.ts",
+    "*.tsx"
+  ]
 }
