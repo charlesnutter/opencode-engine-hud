@@ -59,7 +59,7 @@ const INFO = {
   tokens: { input: 10, output: 358, reasoning: 889, cache: { read: 0, write: 0 } },
   time: { created: 1_000_000, completed: 1_031_960 },
 }
-const TURN = { startAt: 1_000_000, firstAt: 1_000_660, lastAt: 1_032_070, bytes: 0 }
+const TURN = { startAt: 1_000_000, firstAt: 1_000_660, lastAt: 1_032_070 }
 
 // ---- the workloads ----------------------------------------------------------
 const workloads = {
@@ -93,7 +93,7 @@ const turns = new Map()
 workloads["MODEL: turn map, create then complete"] = (i) => {
   // Mirrors turn()/turns.delete(): every turn that completes is removed.
   const id = `msg_${i}`
-  turns.set(id, { startAt: i, firstAt: i + 1, lastAt: i + 2, bytes: 0 })
+  turns.set(id, { startAt: i, firstAt: i + 1, lastAt: i + 2 })
   turns.delete(id)
   return turns.size
 }

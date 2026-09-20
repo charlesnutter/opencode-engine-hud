@@ -437,7 +437,7 @@ const tui: TuiPlugin = async (api, options) => {
   const turn = (id: string): Turn => {
     let t = turns.get(id)
     if (!t) {
-      t = { bytes: 0 }
+      t = {}
       turns.set(id, t)
       if (turns.size > 64) {
         // Bound the map; drop the oldest insertion.
@@ -532,6 +532,11 @@ const tui: TuiPlugin = async (api, options) => {
   const offs: Array<() => void> = []
   try {
     offs.push(
+      // Fires once per streamed chunk, so everything here is O(1): two field
+      // reads, a Map lookup and two timestamps. It previously also summed
+      // Buffer.byteLength(delta) into a `bytes` field that nothing ever read —
+      // the only work proportional to message length, spent on a value that
+      // was discarded.
       api.event.on("message.part.delta", (evt) => {
         const p = evt?.properties
         if (!p || (p.field !== "text" && p.field !== "reasoning")) return
@@ -541,7 +546,6 @@ const tui: TuiPlugin = async (api, options) => {
         const now = Date.now()
         if (!t.firstAt) t.firstAt = now
         t.lastAt = now
-        if (typeof p.delta === "string") t.bytes += Buffer.byteLength(p.delta, "utf8")
       })
     )
     offs.push(

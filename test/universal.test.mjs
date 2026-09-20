@@ -25,7 +25,7 @@ function test(name, fn) {
 // The observed Splash turn. The decode window is the 31.41s implied by the
 // engine's own 1247 / 39.7, and TTFT 0.66s sits before it.
 const START = 1_000_000
-const splashTurn = { startAt: START, firstAt: START + 660, lastAt: START + 660 + 31_410, bytes: 0 }
+const splashTurn = { startAt: START, firstAt: START + 660, lastAt: START + 660 + 31_410 }
 const splashInfo = {
   tokens: { output: 358, reasoning: 889 },
   time: { created: START, completed: START + 31_960 },
@@ -62,7 +62,7 @@ test("the totals line is the topline total with thinking as a subset", () => {
 
 test("a non-reasoning turn is unaffected by the fix", () => {
   const info = { tokens: { output: 100, reasoning: 0 }, time: { created: START, completed: START + 5_000 } }
-  const turn = { startAt: START, firstAt: START + 500, lastAt: START + 5_000, bytes: 0 }
+  const turn = { startAt: START, firstAt: START + 500, lastAt: START + 5_000 }
   const { decodeTokS } = turnRate(100 + 0, info, turn)
   assert.ok(Math.abs(decodeTokS - 100 / 4.5) < 0.01)
   assert.ok(!universalLine("x", "m", info, turn).includes("think"))
@@ -76,7 +76,7 @@ test("missing token counts yield no rate rather than zero", () => {
 test("a zero-length stream window falls back to whole-request time", () => {
   const info = { tokens: { output: 50 }, time: { created: START, completed: START + 2_000 } }
   // firstAt == lastAt: nothing to measure across, so the fallback applies.
-  const turn = { startAt: START, firstAt: START + 100, lastAt: START + 100, bytes: 0 }
+  const turn = { startAt: START, firstAt: START + 100, lastAt: START + 100 }
   const { decodeTokS } = turnRate(50, info, turn)
   assert.ok(Math.abs(decodeTokS - 25) < 0.01, `expected 50/2s, got ${decodeTokS}`)
 })

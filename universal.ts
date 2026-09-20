@@ -51,7 +51,6 @@ export interface Turn {
   startAt?: number // request start (message.time.created), for TTFT
   firstAt?: number // first streamed delta
   lastAt?: number // last streamed delta
-  bytes: number // streamed bytes, for an estimate when usage is absent
 }
 
 /**
