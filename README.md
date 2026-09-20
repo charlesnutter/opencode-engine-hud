@@ -277,7 +277,7 @@ Per-engine notes:
 
 ## Install (this plugin)
 
-Requires OpenCode ≥ 1.18.20. This is a **TUI plugin**, so it goes in
+Requires OpenCode ≥ 1.18.0. This is a **TUI plugin**, so it goes in
 `~/.config/opencode/tui.json` (not `opencode.json`):
 
 ```jsonc
@@ -334,6 +334,23 @@ npm install
 npm run typecheck
 npm test
 ```
+
+`@opencode-ai/plugin` and `@opencode-ai/sdk` are pinned in `devDependencies`
+to exactly the version floor declared in `engines.opencode`, not to a `>=`
+range. A range resolves to the newest published version, so the typecheck
+would have silently validated against something newer than the floor being
+claimed — which is how the floor came to be wrong: it was set to whatever
+happened to be installed on the first commit, and this plugin was running
+against OpenCode 1.18.31 (whose bundled `@opencode-ai/plugin` is 1.18.18)
+the whole time, below the 1.18.20 the package declared. Pinning means
+`npm run typecheck` fails if the floor is ever raised past what the code
+needs, or lowered past what it supports.
+
+The floor is 1.18.0 because `dist/tui.d.ts` is byte-identical across every
+1.18.x release, so every API used here — `lifecycle.signal`,
+`lifecycle.onDispose`, `slots.register`, the `sidebar_footer` slot and
+`event.on` — is unchanged across the line. The same surface exists back to
+1.16.2, but nothing here has been run against it, so it is not claimed.
 
 ## Roadmap
 
