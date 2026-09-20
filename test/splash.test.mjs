@@ -94,6 +94,44 @@ test("Splash: a multi-request turn reports how many, so sums are not misread", (
   assert.equal(t.completionTokens, diffSplashSamples(b, a).completionTokens)
 })
 
+test("Splash: aggregate rate over several real requests is honest, not a mismatch", () => {
+  // E2 audit: unlike LMDeploy's engine-timed branches (prometheus.ts), Splash
+  // has no SEPARATE observation-count metric that could diverge from the
+  // token/time counters -- decodeWallMs is a running sum incremented
+  // alongside decodeTokens for the same requests, always. Proven rather than
+  // just reasoned: applies the REAL single-turn delta twice on top of the
+  // real baseline, simulating two identical-shaped requests landing in one
+  // window. The aggregate rate must equal the per-request rate exactly (both
+  // token count and time doubled proportionally), and completionTokens must
+  // be exactly 2x -- neither would hold if the numerator and denominator
+  // could silently span a different number of requests.
+  const [before, after] = pair("splash")
+  const single = diffSplashSamples(before, after)
+  const d = {
+    requestsCompleted: after.requestsCompleted - before.requestsCompleted,
+    decodeTokens: after.decodeTokens - before.decodeTokens,
+    decodeWallMs: after.decodeWallMs - before.decodeWallMs,
+    prefillTokens: after.prefillTokens - before.prefillTokens,
+    prefillWallMs: after.prefillWallMs - before.prefillWallMs,
+    cacheReusedTokens: after.cacheReusedTokens - before.cacheReusedTokens,
+  }
+  const twoReqs = {
+    ...after,
+    requestsCompleted: before.requestsCompleted + d.requestsCompleted * 2,
+    decodeTokens: before.decodeTokens + d.decodeTokens * 2,
+    decodeWallMs: before.decodeWallMs + d.decodeWallMs * 2,
+    prefillTokens: before.prefillTokens + d.prefillTokens * 2,
+    prefillWallMs: before.prefillWallMs + d.prefillWallMs * 2,
+    cacheReusedTokens: before.cacheReusedTokens + d.cacheReusedTokens * 2,
+  }
+  const double = diffSplashSamples(before, twoReqs)
+  assert.equal(double.requests, 2)
+  assert.equal(double.completionTokens, single.completionTokens * 2)
+  assert.equal(double.cachedTokens, single.cachedTokens * 2)
+  assert.ok(Math.abs(double.decodeTokS - single.decodeTokS) < 1e-9, `${double.decodeTokS} vs ${single.decodeTokS}`)
+  assert.ok(Math.abs(double.prefillTokS - single.prefillTokS) < 1e-9)
+})
+
 // ---- guards -----------------------------------------------------------------
 test("Splash: no completed request in the window yields nothing", () => {
   const [, a] = pair("splash")
