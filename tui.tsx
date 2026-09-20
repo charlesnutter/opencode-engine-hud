@@ -550,6 +550,10 @@ const tui: TuiPlugin = async (api, options) => {
     }
     if (!line) line = universalLine(provider, model, info, t)
     turns.delete(info.id)
+    // Audit C3: eviction only fires at the 64-entry bound, so it cannot show a
+    // slow leak. This does: the map should return to 0 between turns, and any
+    // residue is a turn that started and never completed.
+    dbg(`turns: size ${turns.size} after completing ${info.id}`)
     if (line) {
       store.text = line
       // Audit B6: compare this against what the sidebar actually displays.
