@@ -15,7 +15,7 @@
 //
 // No JSX/solid-js imports, so it stays unit-testable (test/splash.test.mjs).
 
-import { sumLabeledMetric } from "./prometheus"
+import { sumLabeledMetric } from "../prometheus-text"
 import { httpText, type HttpOptions } from "../http"
 
 /**

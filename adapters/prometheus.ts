@@ -1,4 +1,5 @@
 import { httpText, type HttpOptions } from "../http"
+import { sumLabeledMetric } from "../prometheus-text"
 
 // Pure Prometheus scraping/parsing for the vLLM and SGLang enrichment tier.
 // No JSX, no OpenCode/solid-js imports — kept separate so it can be unit
@@ -122,27 +123,6 @@ export interface PromSample {
   prefillTimeCount: number
   decodeTimeSum: number
   decodeTimeCount: number
-}
-
-/**
- * Sums every series sharing `name`, ignoring labels — both engines split some
- * counters by rank or cache source (sglang:cached_tokens_total{cache_source=…}),
- * and the total across them is what matters. A Prometheus client also emits a
- * `_created` line per counter holding a unix timestamp, so the match must not
- * accept a longer name this is only a prefix of.
- */
-export function sumLabeledMetric(text: string, name: string): number {
-  let total = 0
-  for (const line of text.split("\n")) {
-    if (line.startsWith("#") || !line.startsWith(name)) continue
-    const rest = line.slice(name.length)
-    if (rest.length > 0 && rest[0] !== "{" && rest[0] !== " ") continue // longer name, same prefix
-    const sp = line.lastIndexOf(" ")
-    if (sp === -1) continue
-    const v = Number(line.slice(sp + 1))
-    if (!Number.isNaN(v)) total += v
-  }
-  return total
 }
 
 export function parsePromSample(text: string, spec: PromSpec): PromSample | null {

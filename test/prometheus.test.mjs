@@ -12,7 +12,6 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import {
-  sumLabeledMetric,
   parsePromSample,
   diffPromSamples,
   VLLM_SPEC,
@@ -126,23 +125,6 @@ test("SGLang: a non-streaming turn reports no decode rate rather than a fake one
   assert.ok(diff)
   assert.equal(diff.completionTokens, 25)
   assert.equal(diff.decodeTokS, undefined)
-})
-
-// ---- sumLabeledMetric: the `_created` line trap ----------------------------
-test("sumLabeledMetric: a name that is a prefix of another metric is not conflated with it", () => {
-  const text = [
-    'vllm:generation_tokens_total{engine="0"} 10.0',
-    'vllm:generation_tokens_total_extra_metric{engine="0"} 99999.0',
-    'vllm:generation_tokens_created{engine="0"} 1789775000.0',
-  ].join("\n")
-  assert.equal(sumLabeledMetric(text, "vllm:generation_tokens_total"), 10)
-})
-
-test("sumLabeledMetric: sums across multiple label sets (data-parallel ranks)", () => {
-  const text = ['vllm:generation_tokens_total{engine="0"} 10.0', 'vllm:generation_tokens_total{engine="1"} 25.0'].join(
-    "\n"
-  )
-  assert.equal(sumLabeledMetric(text, "vllm:generation_tokens_total"), 35)
 })
 
 // ---- an engine's own metrics text is rejected by the other's spec ---------

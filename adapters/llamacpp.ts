@@ -14,13 +14,12 @@
 // unmetriced or unreachable server simply fails the fetch and falls back.
 //
 // On the parser: llama.cpp emits BARE `name value` lines with no labels, where
-// every engine in prometheus.ts labels its series. That looked like it needed
-// its own parser, and carried one for a while. It does not —
-// `sumLabeledMetric` accepts a bare name (it allows a space where a `{` would
-// be), verified against this adapter's live fixtures, so the duplicate parser
-// is gone.
+// every other engine here labels its series. That looked like it needed its
+// own parser, and carried one for a while. It does not — the shared reader in
+// prometheus-text.ts accepts a bare name, verified against this adapter's live
+// fixtures.
 
-import { sumLabeledMetric } from "./prometheus"
+import { sumLabeledMetric } from "../prometheus-text"
 import { httpText, type HttpOptions } from "../http"
 import { nn, ni, short } from "../universal"
 

@@ -51,12 +51,13 @@
     "tui.tsx",
     "http.ts",
     "universal.ts",
+    "prometheus-text.ts",
     "adapters/",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && bun test/http.test.mjs && bun test/universal.test.mjs && bun test/mtplx.test.mjs && bun test/omlx.test.mjs && bun test/llamacpp.test.mjs && bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/splash.test.mjs && bun test/mlxserve.test.mjs && bun test/references.test.mjs"
+    "test": "npm run typecheck && bun test/http.test.mjs && bun test/prometheus-text.test.mjs && bun test/universal.test.mjs && bun test/mtplx.test.mjs && bun test/omlx.test.mjs && bun test/llamacpp.test.mjs && bun test/prometheus.test.mjs && bun test/koboldcpp.test.mjs && bun test/splash.test.mjs && bun test/mlxserve.test.mjs && bun test/references.test.mjs"
   }
 }
