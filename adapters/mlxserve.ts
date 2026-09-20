@@ -22,6 +22,7 @@
 // No JSX/solid-js imports, so it stays unit-testable (test/mlxserve.test.mjs).
 
 import { httpJson, type HttpOptions } from "../http"
+import { nn, ni, short } from "../format"
 
 /** One record from /v1/metrics/requests, as the server names its fields. */
 export interface MlxServeRequest {
@@ -78,6 +79,24 @@ export interface MlxServeTurn {
    * Worth showing, or the turn reads as a collapse in performance.
    */
   coldStart: boolean
+  /**
+   * Usable records summed into this turn — normally 1. mlx-serve keeps a
+   * bounded history (`last_n`, requested as 5) of individual records rather
+   * than only the most recent one, so unlike KoboldCpp's `/api/extra/perf`
+   * this genuinely CAN recover more than one request's tokens when several
+   * land between polls (an agentic turn's tool round trips, the same real
+   * case Splash's own `requests` field exists for).
+   *
+   * Confirmed missing before this field existed: three records B, C landing
+   * after the last-seen id, only C's (the newest's) completionTokens ever
+   * reported — B's tokens silently gone, no indication. completionTokens and
+   * promptTokens below are now the SUM across every usable new record; the
+   * rate/ttft/streamed fields still describe only the single newest one when
+   * `requests === 1`, and are dropped (not misattributed) when > 1, since
+   * mlx-serve hands over a pre-computed per-record rate with no raw
+   * token+time counters to aggregate the way Splash's do.
+   */
+  requests: number
 }
 
 /**
@@ -125,30 +144,95 @@ export function mlxServeTurn(
   records: MlxServeRequest[],
   lastSeenId: string | undefined
 ): MlxServeTurn | null {
-  const r = records.find(
+  // Two different situations, and conflating them was a real bug caught by
+  // the existing tests: with NO baseline yet (first turn after launch),
+  // there is nothing to diff against, so this must behave like every other
+  // adapter's first-turn case -- scan for the single newest USABLE record
+  // (skipping past any failed/empty ones at the head, as `.find()` always
+  // did), never summing the whole `last_n` history the server happened to
+  // be holding before this plugin ever started watching. Only once a
+  // baseline EXISTS -- whether still visible or aged out of the bounded
+  // history because more requests landed than the server retains -- does
+  // summing every record ahead of it become correct, since all of it is
+  // then provably new.
+  const sumAcrossWindow = lastSeenId !== undefined
+  const newRecords = !sumAcrossWindow
+    ? records
+    : (() => {
+        const idx = records.findIndex((x) => x.requestId === lastSeenId)
+        return idx === -1 ? records : records.slice(0, idx)
+      })()
+
+  const usable = newRecords.filter(
     (x) => x.statusCode < 400 && x.error === null && (x.completionTokens ?? 0) > 0
   )
-  if (!r) return null
-  if (lastSeenId !== undefined && r.requestId === lastSeenId) return null
+  if (usable.length === 0) return null
+  // No baseline: only the single newest usable record, matching every other
+  // adapter's first-turn behaviour and the original .find()-based logic.
+  const relevant = sumAcrossWindow ? usable : usable.slice(0, 1)
 
-  const totalS = r.totalDurationMs / 1000
+  const head = relevant[0] // newest usable record: source for rate/ttft/streamed
+  const totalS = head.totalDurationMs / 1000
   // TTFT at or above the whole duration means it was stamped at completion.
   const streamed =
-    r.ttftMs !== null && r.totalDurationMs > 0 && r.ttftMs < r.totalDurationMs * NON_STREAM_RATIO
+    head.ttftMs !== null && head.totalDurationMs > 0 && head.ttftMs < head.totalDurationMs * NON_STREAM_RATIO
+  const rate = head.tokensPerSecond !== null && head.tokensPerSecond > 0 ? head.tokensPerSecond : undefined
 
-  const rate = r.tokensPerSecond !== null && r.tokensPerSecond > 0 ? r.tokensPerSecond : undefined
+  // Sum tokens across every usable new record -- this IS recoverable, unlike
+  // KoboldCpp's endpoint, because individual records survive rather than
+  // only the latest.
+  const completionTokens = relevant.reduce((sum, x) => sum + (x.completionTokens ?? 0), 0)
+  const promptTokens = relevant.every((x) => x.promptTokens !== null)
+    ? relevant.reduce((sum, x) => sum + (x.promptTokens ?? 0), 0)
+    : undefined // a streamed record reports no prompt count; can't sum a mix
 
   return {
-    requestId: r.requestId,
-    completionTokens: r.completionTokens as number,
-    promptTokens: r.promptTokens ?? undefined,
-    decodeTokS: streamed ? rate : undefined,
-    overallTokS: streamed ? undefined : rate,
-    ttft: streamed ? (r.ttftMs as number) / 1000 : undefined,
+    requestId: head.requestId,
+    completionTokens,
+    promptTokens,
+    // Only attributable to a single request: with more than one summed in,
+    // there is no raw token+time counter to aggregate a rate from (mlx-serve
+    // hands over a pre-computed per-record tokens_per_second, not the
+    // components), so showing the newest one's rate next to a summed token
+    // count would misattribute it. Dropped, matching how this codebase
+    // treats every other "cannot defend this denominator" case.
+    decodeTokS: relevant.length === 1 && streamed ? rate : undefined,
+    overallTokS: relevant.length === 1 && !streamed ? rate : undefined,
+    ttft: relevant.length === 1 && streamed ? (head.ttftMs as number) / 1000 : undefined,
     totalS,
     streamed,
-    coldStart: r.coldStart,
+    coldStart: relevant.some((x) => x.coldStart),
+    requests: relevant.length,
   }
+}
+
+/**
+ * Renders the panel block. When more than one request was summed into this
+ * turn, the rate/ttft fields are already absent (see mlxServeTurn), and a
+ * trailing note says how many were combined -- matching Splash's own
+ * "N requests this turn" convention, since both exist for the identical real
+ * scenario (an agentic turn's tool round trips landing between two polls).
+ */
+export function formatMlxServeLine(t: MlxServeTurn, model: string): string {
+  // decodeTokS and overallTokS are never both set; they are not comparable,
+  // so the whole-request one is labelled rather than shown as a decode rate.
+  const rate =
+    t.decodeTokS !== undefined
+      ? `${nn(t.decodeTokS)} tok/s${t.ttft !== undefined ? `  ttft ${nn(t.ttft, 2)}s` : ""}`
+      : t.overallTokS !== undefined
+        ? `${nn(t.overallTokS)} tok/s (whole request)`
+        : ""
+  return [
+    `mlx-serve  ${short(model)}`,
+    rate,
+    `${ni(t.completionTokens)} tok${t.promptTokens !== undefined ? `  ${ni(t.promptTokens)} prompt` : ""}  ${nn(t.totalS, 2)}s`,
+    // A cold start loaded the model mid-request; without this the turn reads
+    // as a tenfold slowdown rather than a one-off load.
+    t.coldStart ? "cold start (model loaded)" : "",
+    t.requests > 1 ? `${ni(t.requests)} requests this turn` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 export async function fetchMlxServeRequests(

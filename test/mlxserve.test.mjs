@@ -7,7 +7,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
-import { parseMlxServeRequests, mlxServeTurn } from "../adapters/mlxserve.ts"
+import { parseMlxServeRequests, mlxServeTurn, formatMlxServeLine } from "../adapters/mlxserve.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const raw = (name) => JSON.parse(readFileSync(path.join(dir, "..", "fixtures", name), "utf8"))
@@ -109,6 +109,84 @@ test("mlx-serve: a response that is not this endpoint is rejected", () => {
 test("mlx-serve: an empty history yields nothing", () => {
   assert.deepEqual(parseMlxServeRequests({ requests: [] }), [])
   assert.equal(mlxServeTurn([], undefined), null)
+})
+
+// ---- E1/E3 audit finding: intermediate records between polls were --------
+// ---- silently dropped, not just the rate but the TOKEN COUNTS too --------
+test("mlx-serve: two real records landing between polls are summed, not dropped", () => {
+  // The real fixture holds 3 records. lastSeenId = the oldest -- the two
+  // newer real records (94 + 100 completion tokens) must both be counted.
+  // Before this fix, only the single newest (94) was ever reported, with
+  // the other 100 tokens silently gone and no indication anything was
+  // missed -- the same class of bug koboldcpp had, but here recoverable
+  // because mlx-serve keeps individual records rather than only the latest.
+  const recs = records("mlxserve-streamed.json")
+  const oldest = recs[recs.length - 1].requestId
+  const t = mlxServeTurn(recs, oldest)
+  assert.ok(t)
+  assert.equal(t.requests, 2)
+  assert.equal(t.completionTokens, 94 + 100)
+})
+
+test("mlx-serve: a baseline that aged out of the bounded history sums everything visible", () => {
+  // The server keeps only `last_n` records. If more requests landed than
+  // that between polls, lastSeenId will not be found at all -- but every
+  // record currently visible is still provably newer than it, so all of
+  // them are summed rather than falling back to just the newest.
+  const recs = records("mlxserve-streamed.json")
+  const t = mlxServeTurn(recs, "some-id-not-in-the-history-at-all")
+  assert.ok(t)
+  assert.equal(t.requests, 3)
+  assert.equal(t.completionTokens, 94 + 100 + 60)
+})
+
+test("mlx-serve: the rate is dropped, not misattributed, when several records are summed", () => {
+  const recs = records("mlxserve-streamed.json")
+  const oldest = recs[recs.length - 1].requestId
+  const t = mlxServeTurn(recs, oldest)
+  assert.equal(t.decodeTokS, undefined)
+  assert.equal(t.overallTokS, undefined)
+  assert.equal(t.ttft, undefined)
+})
+
+test("mlx-serve: a mix of streamed and non-streamed records drops promptTokens, not a partial sum", () => {
+  // Real fixture: 2 of the 4 records have prompt_tokens: null (streamed).
+  // Summing only the defined ones would understate; must be undefined.
+  const recs = records("mlxserve-nonstreamed.json")
+  const oldest = recs[recs.length - 1].requestId
+  const t = mlxServeTurn(recs, oldest)
+  assert.equal(t.requests, 3)
+  assert.equal(t.completionTokens, 114 + 94 + 100)
+  assert.equal(t.promptTokens, undefined)
+})
+
+test("mlx-serve: no baseline still means single-newest-only, not the whole visible history", () => {
+  // The bug this guards against: conflating 'no baseline yet' (first turn
+  // after launch -- report only the newest, matching every other adapter)
+  // with 'baseline aged out' (sum everything visible) would have summed
+  // the server's pre-existing history from before this plugin ever started
+  // watching into the very first turn it ever reported.
+  const recs = records("mlxserve-streamed.json")
+  const t = mlxServeTurn(recs, undefined)
+  assert.equal(t.requests, 1)
+  assert.equal(t.completionTokens, 94) // the single newest record only
+})
+
+// ---- rendering: formatMlxServeLine, extracted so this is testable at all --
+test("mlx-serve: renders a note when several records were summed into one turn", () => {
+  const recs = records("mlxserve-streamed.json")
+  const oldest = recs[recs.length - 1].requestId
+  const t = mlxServeTurn(recs, oldest)
+  const out = formatMlxServeLine(t, "qwen05")
+  assert.ok(out.includes("2 requests this turn"), out)
+  assert.ok(out.includes("194 tok"), out)
+})
+
+test("mlx-serve: a normal single-record turn carries no such note", () => {
+  const recs = records("mlxserve-streamed.json")
+  const t = mlxServeTurn(recs, undefined)
+  const out = formatMlxServeLine(t, "qwen05")
+  assert.ok(!out.includes("requests this turn"), out)
 })
 
 console.log(`\n${passed} passed`)

@@ -103,14 +103,24 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   `N requests this turn` so its sums are not misread as a single reply.
 - **mlx-serve is the only engine whose freshness check is exact.** Its
   `/v1/metrics/requests` returns a keyed history of recent requests, so a turn
-  is matched by `request_id` rather than inferred from a counter delta. Three
+  is matched by `request_id` rather than inferred from a counter delta. Four
   things the live server taught us, none documented: `/metrics/requests`
   without the `/v1` prefix is a 404 even though `/metrics` resolves; on a
   **non-streamed** request `ttft_ms` comes back equal to `total_duration_ms`
   and `tokens_per_second` is a whole-request rate, so neither is offered as a
-  decode figure; and a streamed request reports **no prompt count** at all.
-  Cold starts are flagged, because a turn that loads the model runs ~10x longer
-  (4.8s against 0.46s warm) and would otherwise read as a collapse.
+  decode figure; a streamed request reports **no prompt count** at all; and
+  because the endpoint keeps a *bounded* history rather than just the latest
+  request (unlike KoboldCpp), a turn that fires several requests can have its
+  tokens genuinely recovered by summing every record newer than the last one
+  reported, rather than only ever showing the single newest — fixed after
+  finding it silently dropped an intermediate request's tokens with no
+  indication anything was missed. The rate is dropped rather than
+  misattributed when more than one record is summed, since mlx-serve hands
+  over a pre-computed per-record rate with no raw counters to aggregate the
+  way Splash's do; the panel says `N requests this turn` instead, matching
+  Splash's own convention for the identical real scenario. Cold starts are
+  flagged, because a turn that loads the model runs ~10x longer (4.8s against
+  0.46s warm) and would otherwise read as a collapse.
 - **Splash draws the fullest line of any engine here.** It publishes
   cumulative token *and* wall-time counters for prefill and decode separately,
   so both rates are differenced straight from its own measurements, plus

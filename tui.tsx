@@ -33,7 +33,7 @@ import { appendFileSync } from "node:fs"
 import { fetchKoboldPerf, koboldTurn, formatKoboldLine } from "./adapters/koboldcpp"
 import { fetchSplashSample, diffSplashSamples } from "./adapters/splash"
 import type { SplashSample } from "./adapters/splash"
-import { fetchMlxServeRequests, mlxServeTurn } from "./adapters/mlxserve"
+import { fetchMlxServeRequests, mlxServeTurn, formatMlxServeLine } from "./adapters/mlxserve"
 import { turnRate, universalLine } from "./universal"
 import { tokensLabel, short, nn, ni } from "./format"
 import type { Turn } from "./universal"
@@ -135,23 +135,7 @@ async function mlxServeLine(cfg: Config, model: string, http: HttpOptions): Prom
   const t = mlxServeTurn(recs, mlxServePrevId.get(cfg.mlxServeBase))
   if (!t) return null // nothing newer than the record already reported
   mlxServePrevId.set(cfg.mlxServeBase, t.requestId)
-
-  // decodeTokS and overallTokS are never both set; they are not comparable, so
-  // the whole-request one is labelled rather than shown as a decode rate.
-  const rate =
-    t.decodeTokS !== undefined
-      ? `${nn(t.decodeTokS)} tok/s${t.ttft !== undefined ? `  ttft ${nn(t.ttft, 2)}s` : ""}`
-      : t.overallTokS !== undefined
-        ? `${nn(t.overallTokS)} tok/s (whole request)`
-        : ""
-  return [
-    `mlx-serve  ${short(model)}`,
-    rate,
-    `${ni(t.completionTokens)} tok${t.promptTokens !== undefined ? `  ${ni(t.promptTokens)} prompt` : ""}  ${nn(t.totalS, 2)}s`,
-    // A cold start loaded the model mid-request; without this the turn reads
-    // as a tenfold slowdown rather than a one-off load.
-    t.coldStart ? "cold start (model loaded)" : "",
-  ].filter(Boolean).join("\n")
+  return formatMlxServeLine(t, model)
 }
 
 // ---- Tier 2: Splash enrichment — /metrics, both phases engine-timed -------
