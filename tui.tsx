@@ -24,6 +24,8 @@ import type { RGBA, TextRenderable } from "@opentui/core"
 import { httpJson, httpText, type HttpOptions } from "./http"
 import { fetchMtplxLatest, formatMtplxLine } from "./adapters/mtplx"
 import { fetchOmlxSample, formatOmlxLine } from "./adapters/omlx"
+import { fetchLlamaCppCounters, diffLlamaCppCounters, formatLlamaCppLine } from "./adapters/llamacpp"
+import type { LlamaCppCounters } from "./adapters/llamacpp"
 import type { OmlxSample } from "./adapters/omlx"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
@@ -96,48 +98,11 @@ async function omlxLine(cfg: Config, http: HttpOptions): Promise<string | null> 
   return formatOmlxLine(now, prev)
 }
 
-// ---- Tier 2: llama.cpp enrichment — /metrics, differenced across the turn --
-// llama.cpp's counters are atomic at completion, exactly like oMLX's: they sit
-// still while a request runs and jump once it lands (confirmed against a live
-// server). So the same across-turn snapshot diff applies, with no need for the
-// continuous /slots poll loop a true live ticker would require — the universal
-// layer above already covers TTFT and a live estimate from OpenCode's own
-// streaming events. Needs the server started with --metrics (off by default);
-// unmetriced or unreachable servers just fail the fetch and fall back to the
-// universal line.
-interface LlamaCppCounters {
-  promptTokens: number
-  promptSeconds: number
-  predictedTokens: number
-  predictedSeconds: number
-}
+// ---- Tier 2: llama.cpp / llamafile — /metrics, differenced across the turn -
+// Baseline only; parsing, differencing and formatting live in
+// adapters/llamacpp.ts. llamafile publishes the identical metric names, so it
+// reuses this verbatim — only the URL and the baseline key differ.
 const llamacppPrev = new Map<string, LlamaCppCounters>()
-
-/** llama.cpp emits bare `name value` lines with no labels. */
-function parsePrometheus(text: string): Record<string, number> {
-  const out: Record<string, number> = {}
-  for (const line of text.split("\n")) {
-    if (line.startsWith("#") || !line.trim()) continue
-    const sp = line.lastIndexOf(" ")
-    if (sp === -1) continue
-    const name = line.slice(0, sp).replace(/\{.*\}$/, "")
-    const value = Number(line.slice(sp + 1))
-    if (!Number.isNaN(value)) out[name] = value
-  }
-  return out
-}
-
-async function llamacppCounters(base: string, http: HttpOptions): Promise<LlamaCppCounters | null> {
-  const text = await httpText(`${base}/metrics`, http)
-  if (text === null) return null
-  const v = parsePrometheus(text)
-  return {
-    promptTokens: v["llamacpp:prompt_tokens_total"] ?? 0,
-    promptSeconds: v["llamacpp:prompt_seconds_total"] ?? 0,
-    predictedTokens: v["llamacpp:tokens_predicted_total"] ?? 0,
-    predictedSeconds: v["llamacpp:tokens_predicted_seconds_total"] ?? 0,
-  }
-}
 
 async function llamacppLine(
   key: string,
@@ -146,32 +111,13 @@ async function llamacppLine(
   model: string,
   http: HttpOptions
 ): Promise<string | null> {
-  const now = await llamacppCounters(base, http)
+  const now = await fetchLlamaCppCounters(base, http)
   if (!now) return null // unreachable, or started without --metrics
   const prev = llamacppPrev.get(key)
   llamacppPrev.set(key, now)
-  if (!prev || now.predictedTokens <= prev.predictedTokens) {
-    // No baseline yet (first turn since launch), or nothing moved (answered
-    // from cache faster than we could sample, or a concurrent caller's turn
-    // already advanced the counters). The universal line still covers this
-    // turn; the next one gets a clean diff.
-    return null
-  }
-  const completionTokens = now.predictedTokens - prev.predictedTokens
-  const decodeS = now.predictedSeconds - prev.predictedSeconds
-  // The counter under-reports the prompt on a cache hit (it counts only what
-  // was actually computed), but with no live /slots sample at hand to correct
-  // it, this is what's available — same tradeoff the extension's adapter notes.
-  const promptTokens = now.promptTokens - prev.promptTokens
-  const prefillS = now.promptSeconds - prev.promptSeconds
-  const decodeTokS = decodeS > 0 ? completionTokens / decodeS : undefined
-  const prefillTokS = prefillS > 0 && promptTokens > 0 ? promptTokens / prefillS : undefined
-  return [
-    `${label}  ${short(model)}`,
-    decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s` : "",
-    prefillTokS !== undefined ? `prefill ${ni(prefillTokS)} tok/s` : "",
-    `${ni(completionTokens)} tok  ${nn(decodeS + prefillS, 2)}s`,
-  ].filter(Boolean).join("\n")
+  if (!prev) return null // no baseline yet (first turn since launch)
+  const t = diffLlamaCppCounters(prev, now)
+  return t ? formatLlamaCppLine(t, label, model) : null
 }
 
 // ---- Tier 2: mlx-serve enrichment — /v1/metrics/requests, id-keyed --------
@@ -408,10 +354,10 @@ const tui: TuiPlugin = async (api, options) => {
   fetchOmlxSample(cfg.omlxBase, cfg.omlxKey, startupHttp).then((s) => {
     if (s) omlxPrev = s
   }).catch(() => {})
-  llamacppCounters(cfg.llamacppBase, startupHttp).then((c) => {
+  fetchLlamaCppCounters(cfg.llamacppBase, startupHttp).then((c) => {
     if (c) llamacppPrev.set("llamacpp", c)
   }).catch(() => {})
-  llamacppCounters(cfg.llamafileBase, startupHttp).then((c) => {
+  fetchLlamaCppCounters(cfg.llamafileBase, startupHttp).then((c) => {
     if (c) llamacppPrev.set("llamafile", c)
   }).catch(() => {})
 
