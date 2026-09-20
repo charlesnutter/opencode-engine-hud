@@ -52,7 +52,7 @@ const F = {
 
 const MTPLX_LATEST = {
   decode_tok_s: 30.3, ttft_s: 0.89, prefill_tok_s: 401, completion_tokens: 1247,
-  reasoning_tokens: 889, request_elapsed_s: 1.62, verify_calls: 7,
+  request_elapsed_s: 1.62, verify_calls: 7,
   mean_accept_probability_by_depth: [0.79, 0.83, 0.67],
 }
 const INFO = {

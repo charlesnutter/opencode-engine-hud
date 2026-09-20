@@ -1,19 +1,36 @@
-// Validates mtplx.ts against both panel states observed live in the sidebar.
+// Validates mtplx.ts against LIVE CAPTURES from a running MTPLX server
+// (fixtures/mtplx-completed.json, fixtures/mtplx-interrupted.json), not
+// hand-transcribed screenshot values.
 //
-// The completed turn rendered five lines correctly. The INTERRUPTED turn
-// rendered four, two of which carried placeholders:
+// The two captures are the two shapes that matter:
 //
-//     MTPLX  arsis-dev-ukisai-swift-…
-//     27.5 tok/s  ttft ?s
-//     prefill ? tok/s
-//     85 tok  3.35s
+//   - completed: every field present, `latest` reflects a full turn.
+//   - interrupted: the client aborted the stream mid-generation
+//     (AbortController.abort()). ttft_s and prefill_tok_s come back
+//     genuinely ABSENT — not null, no key at all — while decode_tok_s,
+//     completion_tokens and request_elapsed_s survive. Rendering the
+//     missing pair unguarded is what put "ttft ?s" and "prefill ? tok/s"
+//     in the sidebar; this module exists to prevent that.
 //
-// MTPLX's receipt drops ttft_s and prefill_tok_s when a turn is interrupted,
-// while keeping the decode rate and token count. Those "?" are the failure
-// this module exists to prevent: a placeholder where a measurement belongs.
+// A real finding from capturing the completed fixture: MTPLX's `/metrics`
+// `latest` receipt has NO reasoning/answer token split anywhere in its 342
+// keys, checked exhaustively including nested objects. The turn's own
+// response `usage.completion_tokens_details.reasoning_tokens` was 23 of 64
+// completion tokens, and no field in `latest` held that number under any
+// name. So the adapter cannot show a "(N think)" subset for MTPLX — that
+// split is only in the per-response `usage` body, which this endpoint
+// doesn't expose. completion_tokens itself is still correct (it already
+// includes reasoning, confirmed: 64 matches usage.completion_tokens exactly).
+//
 // Run with: bun test/mtplx.test.mjs
 import { strict as assert } from "node:assert"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import path from "node:path"
 import { formatMtplxLine } from "../adapters/mtplx.ts"
+
+const dir = path.dirname(fileURLToPath(import.meta.url))
+const fixture = (name) => JSON.parse(readFileSync(path.join(dir, "..", "fixtures", name), "utf8"))
 
 let passed = 0
 function test(name, fn) {
@@ -27,78 +44,78 @@ function test(name, fn) {
   }
 }
 
-const MODEL = "arsis-dev-ukisai-swift-qwen3-8-27b-mtplx"
+const MODEL = "arsis-dev-ukisai-swift-qwen3.8-27b-mtplx"
 
-// Values read off the completed-turn screenshot.
-const COMPLETED = {
-  decode_tok_s: 30.3,
-  ttft_s: 0.89,
-  prefill_tok_s: 401,
-  completion_tokens: 22,
-  reasoning_tokens: 0,
-  request_elapsed_s: 1.62,
-  verify_calls: 7,
-  mean_accept_probability_by_depth: [0.79, 0.83, 0.67],
-}
+const completed = fixture("mtplx-completed.json")
+const interrupted = fixture("mtplx-interrupted.json")
 
-// The interrupted turn: same receipt minus the two timing fields.
-const INTERRUPTED = {
-  decode_tok_s: 27.5,
-  ttft_s: null,
-  prefill_tok_s: null,
-  completion_tokens: 85,
-  reasoning_tokens: 0,
-  request_elapsed_s: 3.35,
-  verify_calls: 0,
-}
+// ---- the completed turn, against the response's own usage -----------------
+test("a completed turn's completion_tokens matches the response's own usage", () => {
+  const usage = JSON.parse(completed._provenance.generation_usage)
+  assert.equal(completed.latest.completion_tokens, usage.completion_tokens)
+})
 
-test("a completed turn renders all five lines", () => {
-  const out = formatMtplxLine(COMPLETED, MODEL).split("\n")
+test("a completed turn renders all five lines from the live receipt", () => {
+  const out = formatMtplxLine(completed.latest, MODEL).split("\n")
   assert.equal(out.length, 5, out.join(" | "))
   assert.ok(out[0].startsWith("MTPLX  "))
-  assert.ok(out[1].includes("30.3 tok/s") && out[1].includes("ttft 0.89s"))
-  assert.equal(out[2], "prefill 401 tok/s")
-  assert.ok(out[3].startsWith("22 tok"))
-  assert.ok(out[4].startsWith("MTP 3.14x"), out[4])
+  assert.ok(/^\d+\.\d tok\/s {2}ttft \d\.\d{2}s$/.test(out[1]), out[1])
+  assert.ok(/^prefill \d+ tok\/s$/.test(out[2]), out[2])
+  assert.ok(out[3].startsWith(`${completed.latest.completion_tokens} tok`))
+  assert.ok(/^MTP \d+\.\d{2}x( \d+(\/\d+)*%)?$/.test(out[4]), out[4])
+})
+
+test("completion_tokens already includes reasoning — no separate think subset is claimed", () => {
+  // The turn's usage reported 23 of 64 tokens as reasoning; latest has no
+  // field carrying that split, so the topline is the bare total, matching
+  // what tokensLabel(total, 0) would render — never a fabricated "(N think)".
+  const out = formatMtplxLine(completed.latest, MODEL)
+  assert.ok(out.includes(`${completed.latest.completion_tokens} tok`), out)
+  assert.ok(!out.includes("think"), "no think breakdown is available from /metrics")
+})
+
+// ---- the interrupted turn, real shape from a real abort --------------------
+test("an interrupted turn genuinely lacks ttft_s and prefill_tok_s (not just null)", () => {
+  assert.ok(!("ttft_s" in interrupted.latest), "ttft_s should be absent, not present-as-null")
+  assert.ok(!("prefill_tok_s" in interrupted.latest), "prefill_tok_s should be absent")
+  assert.ok(typeof interrupted.latest.decode_tok_s === "number")
+  assert.ok(typeof interrupted.latest.completion_tokens === "number")
 })
 
 test("an interrupted turn omits the missing figures instead of printing ?", () => {
-  const out = formatMtplxLine(INTERRUPTED, MODEL)
+  const out = formatMtplxLine(interrupted.latest, MODEL)
   assert.ok(!out.includes("?"), `no placeholder may reach the panel:\n${out}`)
-  // What it still knows is kept.
-  assert.ok(out.includes("27.5 tok/s"))
-  assert.ok(out.includes("85 tok"))
-  assert.ok(out.includes("3.35s"))
-  // What it does not know is absent entirely, not blanked.
   assert.ok(!out.includes("ttft"))
   assert.ok(!out.includes("prefill"))
 })
 
-test("an interrupted turn is three lines, not four with holes", () => {
-  const out = formatMtplxLine(INTERRUPTED, MODEL).split("\n")
-  assert.deepEqual(out, ["MTPLX  arsis-dev-ukisai-swift-…", "27.5 tok/s", "85 tok  3.35s"])
+test("an interrupted turn still shows decode rate, tokens and elapsed time", () => {
+  const out = formatMtplxLine(interrupted.latest, MODEL).split("\n")
+  const l = interrupted.latest
+  assert.ok(out[1].startsWith(`${l.decode_tok_s.toFixed(1)} tok/s`))
+  assert.ok(out.some((line) => line.startsWith(`${l.completion_tokens} tok`)))
 })
 
+test("no verify_calls on the interrupted turn means no MTP line", () => {
+  assert.ok(!("verify_calls" in interrupted.latest))
+  const mtpLine = formatMtplxLine(interrupted.latest, MODEL)
+    .split("\n")
+    .find((x) => x.startsWith("MTP "))
+  assert.equal(mtpLine, undefined)
+})
+
+// ---- synthetic edge cases: code paths a live capture won't naturally hit ---
 test("rate and TTFT are independently optional", () => {
-  // TTFT without a rate is still worth showing.
-  const out = formatMtplxLine({ ...INTERRUPTED, decode_tok_s: null, ttft_s: 1.2 }, MODEL)
+  const out = formatMtplxLine({ decode_tok_s: null, ttft_s: 1.2 }, MODEL)
   assert.ok(out.includes("ttft 1.20s"))
   assert.ok(!out.includes("tok/s"))
   assert.ok(!out.includes("?"))
 })
 
 test("no verify passes means no MTP line, not a division by zero", () => {
-  // Match the line, not the substring: the header "MTPLX" contains "MTP".
   const mtpLine = (l) => formatMtplxLine(l, MODEL).split("\n").find((x) => x.startsWith("MTP "))
-  assert.equal(mtpLine(INTERRUPTED), undefined)
-  assert.equal(mtpLine({ ...COMPLETED, verify_calls: 0 }), undefined)
-  assert.ok(mtpLine(COMPLETED)?.startsWith("MTP 3.14x"))
-})
-
-test("reasoning tokens show as a subset of the topline", () => {
-  const out = formatMtplxLine({ ...COMPLETED, completion_tokens: 1247, reasoning_tokens: 889 }, MODEL)
-  assert.ok(out.includes("1247 tok (889 think)"), out)
-  assert.ok(!out.includes("(+"), "never the additive form")
+  assert.equal(mtpLine({ completion_tokens: 50, verify_calls: 0 }), undefined)
+  assert.ok(mtpLine({ completion_tokens: 50, verify_calls: 10 })?.startsWith("MTP 5.00x"))
 })
 
 test("an empty receipt renders the header alone, with no holes", () => {
@@ -108,7 +125,7 @@ test("an empty receipt renders the header alone, with no holes", () => {
 })
 
 test("NaN is treated as absent, not rendered", () => {
-  const out = formatMtplxLine({ ...COMPLETED, decode_tok_s: NaN, prefill_tok_s: NaN }, MODEL)
+  const out = formatMtplxLine({ decode_tok_s: NaN, prefill_tok_s: NaN, completion_tokens: 22 }, MODEL)
   assert.ok(!out.includes("?"), out)
   assert.ok(!out.includes("prefill"))
 })

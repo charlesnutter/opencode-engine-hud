@@ -8,7 +8,7 @@ block at the bottom of the sidebar, keyed to the model that produced it.
 MTPLX  Qwen3.8-27B
 39.6 tok/s  ttft 0.31s
 prefill 234 tok/s
-63 tok (+23 think)  3.73s
+63 tok  3.73s
 MTP 2.85x 81/60/43%
 ```
 
@@ -33,7 +33,7 @@ get the universal layer.
 
 | Provider id | tok/s | TTFT | Prefill tok/s | Exact tokens | Cache info | Extras | Validated |
 |---|---|---|---|---|---|---|---|
-| `mtplx` | ✅ | ✅ per-turn | ✅ | ✅ | — | MTP speculative accept %, reasoning tokens | live |
+| `mtplx` | ✅ | ✅ per-turn | ✅ | ✅ | — | MTP speculative accept % | live |
 | `omlx` | ✅ (recovered, per-turn when 1 req/interval) | ❌ | ✅ (recovered) | ✅ | ✅ cached tokens | — | live |
 | `llamacpp` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
 | `llamafile` | ✅ | ❌ (universal TTFT still shows) | ✅ | ✅ | — | — | live |
@@ -68,6 +68,14 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   has no cache counter at all; its prompt-token count is silently *lower* on a
   cache hit, since the underlying counter only tracks what was actually
   computed.
+- **MTPLX shows no think/answer split, and can't from this endpoint.** A live
+  capture's `/metrics` `latest` receipt was searched key by key, nested
+  objects included, against a turn whose own response reported 23 of 64
+  completion tokens as reasoning — no field anywhere in the 342 keys held that
+  number. The per-response `usage.completion_tokens_details.reasoning_tokens`
+  MTPLX returns from `/v1/chat/completions` has it; `/metrics` doesn't. This
+  adapter only ever polls the latter, so `completion_tokens` (which does
+  already include reasoning, confirmed) is shown as a bare total.
 - **LMDeploy is the richest surface of any engine here.** It times prefill and
   decode as separate histograms, so both rates are its own measurement rather
   than derived — nothing else can produce a real prefill rate from Prometheus.

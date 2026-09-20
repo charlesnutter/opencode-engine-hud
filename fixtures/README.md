@@ -5,6 +5,8 @@ came from, because "the test passes" means something different depending on it.
 
 | File | Provenance |
 |---|---|
+| `mtplx-completed.json` | **Live capture.** MTPLX (Qwen3.8-27B), one completed turn (`usage: {prompt_tokens: 59, completion_tokens: 64, reasoning_tokens: 23}`). Capturing it found a real gap: `/metrics` `latest` has no reasoning/answer token field anywhere in its 342 keys — checked exhaustively, nested objects included — so the adapter cannot show a think/answer split for MTPLX, unlike engines whose panel gets that from the same endpoint it already polls. |
+| `mtplx-interrupted.json` | **Live capture.** The client aborted an MTPLX stream mid-generation (`AbortController.abort()`). `ttft_s` and `prefill_tok_s` come back genuinely absent (no key, not `null`) while `decode_tok_s`, `completion_tokens` and `request_elapsed_s` survive — the regression case for the `?`-placeholder bug this adapter exists to prevent. |
 | `vllm-mlx-idle.prom`, `vllm-mlx-after.prom` | **Live capture.** Taken from a local vllm-mlx server on Apple Silicon, bracketing one real generation whose response reported `usage: {prompt_tokens: 33, completion_tokens: 50}`. The test asserts against those numbers. |
 | `vllm-metal-before.prom`, `vllm-metal-after.prom` | **Live capture.** Taken from upstream vLLM running under vllm-metal on Apple Silicon, bracketing one real generation (`usage: {prompt_tokens: 35, completion_tokens: 35}`). |
 | `vllm-idle.prom`, `vllm-busy.prom` | **Real capture**, inherited from the inference-hud VS Code extension. Real bytes a real vLLM emitted, but not captured here and not cross-checked against a response body. |

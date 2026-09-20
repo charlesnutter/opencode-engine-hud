@@ -15,7 +15,7 @@
 // whose output nothing could assert against.
 
 import { httpJson, type HttpOptions } from "../http"
-import { nn, ni, short, tokensLabel } from "../format"
+import { nn, ni, short } from "../format"
 
 /**
  * The fields this plugin reads. All optional — see the note above about
@@ -26,7 +26,6 @@ export interface MtplxLatest {
   prefill_tok_s?: number | null
   ttft_s?: number | null
   completion_tokens?: number | null
-  reasoning_tokens?: number | null
   request_elapsed_s?: number | null
   verify_calls?: number | null
   mean_accept_probability_by_depth?: number[] | null
@@ -68,12 +67,18 @@ export function formatMtplxLine(l: MtplxLatest, model: string): string {
     mtp = `MTP ${nn(completion / verify, 2)}x${acc ? ` ${acc}%` : ""}`
   }
 
-  // MTPLX follows the OpenAI convention: completion_tokens already INCLUDES
-  // reasoning_tokens, so it is the topline as-is.
-  const reasoning = num(l.reasoning_tokens) ?? 0
+  // No think/answer split: a live capture's `latest` was searched key by
+  // key, nested objects included, against a turn whose own response `usage`
+  // reported 23 of 64 completion tokens as reasoning, and no field anywhere
+  // in the 342-key receipt held that number. /metrics does not carry it,
+  // unlike the per-response `usage` block MTPLX returns from
+  // /v1/chat/completions — this adapter only ever sees the former.
+  // completion_tokens does follow the OpenAI convention (it already includes
+  // reasoning), so the total itself is correct; only the "(N think)" subset
+  // tokensLabel can render elsewhere is unavailable here.
   const totals =
     completion !== undefined
-      ? `${tokensLabel(completion, reasoning)}${elapsed !== undefined ? `  ${nn(elapsed, 2)}s` : ""}`
+      ? `${ni(completion)} tok${elapsed !== undefined ? `  ${nn(elapsed, 2)}s` : ""}`
       : ""
 
   return [
