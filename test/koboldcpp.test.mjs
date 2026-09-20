@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
-import { parseKoboldPerf, koboldTurn } from "../adapters/koboldcpp.ts"
+import { parseKoboldPerf, koboldTurn, formatKoboldLine } from "../adapters/koboldcpp.ts"
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const raw = (name) => JSON.parse(readFileSync(path.join(dir, "..", "fixtures", name), "utf8"))
@@ -138,6 +138,54 @@ test("KoboldCpp: draft counters produce an accept rate when a draft model runs",
     last_draft_failed: 10,
   })
   assert.equal(koboldTurn(withDraft, 2).draftAcceptRate, 0.75)
+})
+
+// ---- E1/E3 audit finding: /api/extra/perf keeps no history beyond the -----
+// ---- single most recent request, so a multi-request window is silently ---
+// ---- under-counted unless this is detected and said so --------------------
+test("KoboldCpp: two generations with one poll reports only the last, not a sum", () => {
+  // Live-captured: req1 had 12 completion tokens, req2 had 8. total_gens
+  // advanced by 2 (only one poll happened after both), but last_token_count
+  // is 8 -- exactly req2's own count, req1's 12 tokens are gone from the
+  // endpoint entirely. Confirmed before any fix existed: completionTokens
+  // read 3 while 12 tokens had genuinely just been generated across two
+  // requests in an earlier live reproduction of this exact scenario.
+  const before = parseKoboldPerf(raw("koboldcpp-multigen-before.json"))
+  const after = parseKoboldPerf(raw("koboldcpp-multigen-after.json"))
+  const usage = JSON.parse(raw("koboldcpp-multigen-after.json")._provenance.generation_usage)
+  const t = koboldTurn(after, before.total_gens)
+  assert.ok(t)
+  assert.equal(after.total_gens - before.total_gens, 2, "two generations landed in this window")
+  assert.equal(t.completionTokens, usage.req2.completion_tokens, "only the last request's tokens are ever available")
+  assert.notEqual(t.completionTokens, usage.req1.completion_tokens + usage.req2.completion_tokens)
+  assert.equal(t.generationsInWindow, 2, "the drop must be detectable, even though it cannot be recovered")
+})
+
+test("KoboldCpp: a single-generation turn carries no generationsInWindow note", () => {
+  const after = parseKoboldPerf(raw("koboldcpp-after.json"))
+  const t = koboldTurn(after, after.total_gens - 1)
+  assert.equal(t.generationsInWindow, 1)
+})
+
+test("KoboldCpp: the first turn after launch has no generationsInWindow (no baseline to diff)", () => {
+  const after = parseKoboldPerf(raw("koboldcpp-after.json"))
+  assert.equal(koboldTurn(after, undefined).generationsInWindow, undefined)
+})
+
+// ---- rendering: formatKoboldLine, extracted so this is testable at all ----
+test("KoboldCpp: renders a note when several generations landed in one window", () => {
+  const before = parseKoboldPerf(raw("koboldcpp-multigen-before.json"))
+  const after = parseKoboldPerf(raw("koboldcpp-multigen-after.json"))
+  const t = koboldTurn(after, before.total_gens)
+  const out = formatKoboldLine(t, "qwen2.5-0.5b-instruct-q4_k_m")
+  assert.ok(out.includes("2 generations this turn (last shown only)"), out)
+})
+
+test("KoboldCpp: a normal single-generation turn carries no such note", () => {
+  const after = parseKoboldPerf(raw("koboldcpp-after.json"))
+  const t = koboldTurn(after, after.total_gens - 1)
+  const out = formatKoboldLine(t, "m")
+  assert.ok(!out.includes("generations this turn"), out)
 })
 
 console.log(`\n${passed} passed`)

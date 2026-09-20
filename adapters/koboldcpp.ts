@@ -16,6 +16,7 @@
 // without the TUI runtime.
 
 import { httpJson, type HttpOptions } from "../http"
+import { nn, ni, short } from "../format"
 /**
  * The fields of /api/extra/perf this plugin reads. The endpoint returns more
  * (image/TTS/transcription counters, horde bookkeeping, seeds) that describe
@@ -73,6 +74,24 @@ export interface KoboldTurn {
   decodeS: number
   /** Fraction of speculative draft tokens accepted, when a draft model is in use. */
   draftAcceptRate?: number
+  /**
+   * How many generations landed between the previous sample and this one,
+   * when known (undefined on the first turn after launch, where there is no
+   * baseline to diff against).
+   *
+   * /api/extra/perf structurally cannot do better than this: it stores only
+   * the MOST RECENT request, with no per-request history at all. If more than
+   * one generation completes in a window — an agentic turn firing several
+   * tool round trips is the real, reachable case, same as every other
+   * multi-request adapter here — every field above describes ONLY the last
+   * of them. Confirmed live: firing two generations (9 and 3 completion
+   * tokens) with one poll after both reported completionTokens: 3, silently
+   * dropping the first request's 9 tokens with no indication anything was
+   * missed. Unlike llama.cpp's identical-in-spirit freshness gap, this one
+   * IS detectable — total_gens still counts every generation even though
+   * only the latest's stats survive — so the caller can and must say so.
+   */
+  generationsInWindow?: number
 }
 
 export function parseKoboldPerf(raw: unknown): KoboldPerf | null {
@@ -136,7 +155,29 @@ export function koboldTurn(now: KoboldPerf, prevTotalGens: number | undefined): 
     prefillS: now.last_process_time,
     decodeS: now.last_eval_time,
     draftAcceptRate,
+    generationsInWindow: prevTotalGens !== undefined ? now.total_gens - prevTotalGens : undefined,
   }
+}
+
+/**
+ * Renders the panel block. When more than one generation landed in the
+ * window, appends a note that the figures above are the LAST generation
+ * only, not a sum across the window — there is nothing here to sum them
+ * with, since the endpoint keeps no history beyond the most recent request.
+ */
+export function formatKoboldLine(t: KoboldTurn, model: string): string {
+  return [
+    `KoboldCpp  ${short(model)}`,
+    t.decodeTokS !== undefined ? `${nn(t.decodeTokS)} tok/s` : "",
+    t.prefillTokS !== undefined ? `prefill ${ni(t.prefillTokS)} tok/s` : "",
+    `${ni(t.completionTokens)} tok  ${nn(t.prefillS + t.decodeS, 2)}s`,
+    t.draftAcceptRate !== undefined ? `draft ${ni(t.draftAcceptRate * 100)}% accepted` : "",
+    t.generationsInWindow !== undefined && t.generationsInWindow > 1
+      ? `${ni(t.generationsInWindow)} generations this turn (last shown only)`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 export async function fetchKoboldPerf(

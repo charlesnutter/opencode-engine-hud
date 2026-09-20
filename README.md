@@ -123,14 +123,20 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
 - **KoboldCpp is the only engine here that needs no arithmetic from us.**
   `/api/extra/perf` reports the previous request already reduced, with prefill
   and decode timed as separate phases, so both rates are the engine's own
-  measurements. Three things the live server taught us, none of them in the
+  measurements. Four things the live server taught us, none of them in the
   docs: its phase timers quantise to about 1ms, so a short prompt yields
   nonsense like "16000 tok/s" prefill (suppressed below a 10ms floor); a *full*
-  prefix-cache hit reports `process_time: 0.0` rather than a huge rate; and a
+  prefix-cache hit reports `process_time: 0.0` rather than a huge rate; a
   *partial* cache hit silently overstates prefill, because `last_input_count`
   counts the whole prompt while `last_process_time` covers only what was
-  recomputed. That last one is documented, not fixed — the endpoint exposes no
-  cached-token count to correct it with.
+  recomputed (documented, not fixed — the endpoint exposes no cached-token
+  count to correct it with); and the endpoint keeps no history beyond the
+  single most recent request, so a turn that fires several requests (an
+  agentic turn's tool round trips) silently reports only the last one's
+  numbers. That last one *was* fixed — `total_gens` still counts every
+  request even though `last_*` doesn't, so the gap is now detected and the
+  panel says "N generations this turn (last shown only)" instead of quietly
+  under-reporting.
 - **KoboldCpp's streaming emits no usage chunk**, so for a streamed turn the
   universal layer never sees token counts at all. This endpoint is the only
   source of them, which makes the enrichment tier load-bearing here rather

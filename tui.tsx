@@ -30,7 +30,7 @@ import type { OmlxSample } from "./adapters/omlx"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { appendFileSync } from "node:fs"
-import { fetchKoboldPerf, koboldTurn } from "./adapters/koboldcpp"
+import { fetchKoboldPerf, koboldTurn, formatKoboldLine } from "./adapters/koboldcpp"
 import { fetchSplashSample, diffSplashSamples } from "./adapters/splash"
 import type { SplashSample } from "./adapters/splash"
 import { fetchMlxServeRequests, mlxServeTurn } from "./adapters/mlxserve"
@@ -201,13 +201,7 @@ async function koboldLine(base: string, model: string, http: HttpOptions): Promi
   koboldPrevGens.set(base, perf.total_gens)
   const t = koboldTurn(perf, prev)
   if (!t) return null // nothing new to attribute to this turn
-  return [
-    `KoboldCpp  ${short(model)}`,
-    t.decodeTokS !== undefined ? `${nn(t.decodeTokS)} tok/s` : "",
-    t.prefillTokS !== undefined ? `prefill ${ni(t.prefillTokS)} tok/s` : "",
-    `${ni(t.completionTokens)} tok  ${nn(t.prefillS + t.decodeS, 2)}s`,
-    t.draftAcceptRate !== undefined ? `draft ${ni(t.draftAcceptRate * 100)}% accepted` : "",
-  ].filter(Boolean).join("\n")
+  return formatKoboldLine(t, model)
 }
 
 // ---- Tier 2: vLLM / SGLang enrichment — Prometheus, diffed across the turn -
