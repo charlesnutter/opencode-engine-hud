@@ -92,12 +92,25 @@ export function formatOmlxLine(now: OmlxSample, prev: OmlxSample | undefined): s
     ].join("\n")
   }
 
-  // Fall back to the lifetime average when the window held several requests:
-  // still true, just not this turn alone, and the label is dropped because the
-  // token counts below ARE this window's.
-  const decode = recoverLatest(prev.avgGen, prev.requests, now.avgGen, now.requests) ?? now.avgGen
-  const prefill =
-    recoverLatest(prev.avgPrefill, prev.requests, now.avgPrefill, now.requests) ?? now.avgPrefill
+  // More than one request landed in the window (an agentic turn issuing
+  // several tool round trips, same as Splash's `requests > 1` case): recovery
+  // needs exactly one, so it falls back to the raw current field. Unlike the
+  // no-baseline branch, that field is not merely unattributed — it is the
+  // server's FULL LIFETIME average, unwindowed, across every request since
+  // launch, not just the ones in this turn. Reusing the "(avg)" suffix the
+  // no-baseline branch already uses says so, matching the same vocabulary
+  // `diffPromSamples`'s ttftExact uses elsewhere in this codebase for the
+  // identical situation. The token counts stay unlabelled deliberately: those
+  // ARE exact deltas for this window, verified against real captures
+  // (fixtures/omlx-after-two.json: 220-100=120 completion, 45-17=28 prompt,
+  // matching the two requests' own usage exactly) — only the rate is unmoored
+  // from the window.
+  const recoveredDecode = recoverLatest(prev.avgGen, prev.requests, now.avgGen, now.requests)
+  const recoveredPrefill = recoverLatest(prev.avgPrefill, prev.requests, now.avgPrefill, now.requests)
+  const decodeLabel = recoveredDecode === undefined ? " (avg)" : ""
+  const prefillLabel = recoveredPrefill === undefined ? " (avg)" : ""
+  const decode = recoveredDecode ?? now.avgGen
+  const prefill = recoveredPrefill ?? now.avgPrefill
 
   const completion = now.completion - prev.completion
   const promptTokens = now.prompt - prev.prompt
@@ -105,8 +118,8 @@ export function formatOmlxLine(now: OmlxSample, prev: OmlxSample | undefined): s
 
   return [
     header,
-    `${nn(decode)} tok/s`,
-    `prefill ${ni(prefill)} tok/s`,
+    `${nn(decode)} tok/s${decodeLabel}`,
+    `prefill ${ni(prefill)} tok/s${prefillLabel}`,
     `${ni(completion)} tok  (${ni(promptTokens)} prompt${cached > 0 ? `, ${ni(cached)} cached` : ""})`,
   ].join("\n")
 }
