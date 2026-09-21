@@ -23,11 +23,11 @@ streaming/TTFT, `message.updated` for exact final token counts and wall time),
 so it works for any OpenAI-compatible server: Ollama, MLX-LM, LM Studio,
 anything.
 
-**Enrichment** — five engines additionally get their own server-side telemetry
-fetched and merged in, keyed off the OpenCode *provider id* (the key under
-`.provider` in `opencode.json`). Get that id right (see below) and the richer
-line replaces the universal one automatically; anything else, and you still
-get the universal layer.
+**Enrichment** — the provider ids in the table below additionally get their
+own server-side telemetry fetched and merged in, keyed off the OpenCode
+*provider id* (the key under `.provider` in `opencode.json`). Get that id
+right (see below) and the richer line replaces the universal one
+automatically; anything else, and you still get the universal layer.
 
 ## Engines: what each one shows
 
@@ -42,7 +42,7 @@ get the universal layer.
 | `koboldcpp` | ✅ **engine-timed decode phase** | ❌ (universal TTFT still shows) | ✅ **engine-timed prefill phase**, when the prompt is big enough to time | ✅ | — | speculative-draft accept % (with a draft model) | **live** |
 | `vllm` | ✅ (from OpenCode's own turn timing, not vLLM's own histogram) | ✅ per-turn when one request lands, else window average | ❌ | ✅ (prompt/generation/cached) | ✅ cached tokens | — | **live** (via vllm-metal on Apple Silicon) |
 | `sglang` | ✅ **engine-measured** on streaming turns, excludes prefill | ✅ per-turn when one request lands, else window average | ❌ | ✅ | ✅ cached tokens | — | **live** (via its MLX backend on Apple Silicon) |
-| `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | live |
+| `vllmmlx` | ✅ **engine-measured**, excludes prefill | ✅ **per-turn, engine-measured** | ❌ | ✅ | — | — | **live** |
 | `aphrodite` | same as vLLM | same as vLLM | ❌ | ✅ | ✅ | — | **derived fixture** (CUDA-only engine) |
 | `lmdeploy` | ✅ **engine-timed decode phase** | ✅ per-turn | ✅ **engine-timed prefill phase** | ✅ | — | — | **synthetic fixtures** (CUDA-only engine) |
 | anything else (Ollama, MLX-LM, LM Studio, …) | ✅ | ✅ per-turn | ❌ | ✅ | ❌ | — | live |
@@ -95,7 +95,10 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   the official Apple Silicon plugin: it runs upstream vLLM's own API server with
   an MLX/Metal compute backend, so its `/metrics` *is* vLLM's. Every field name
   in our spec was confirmed against a live instance, with deltas cross-checked
-  against the response's own `usage`.
+  against the response's own `usage`. Its tests also carry an older,
+  weaker-provenance pair (`vllm-idle.prom`/`vllm-busy.prom`, inherited from a
+  prior project and not cross-checked against a response body) — see
+  [`fixtures/README.md`](fixtures/README.md) for the distinction.
 - **Every figure is one turn, never a running total.** Each adapter samples at
   turn boundaries and subtracts, so nothing accumulates across a session. The
   one wrinkle: an OpenCode turn that calls tools issues a request per round
@@ -167,6 +170,20 @@ Notes on what's *missing* and why, since that matters as much as what's shown:
   rather than measured. A passing test proves the parser and the diff
   arithmetic are right; it does not prove the engine emits these names.
   See [`fixtures/README.md`](fixtures/README.md) for per-file provenance.
+- **llamafile has no fixture of its own**, and its "live" mark above rests on
+  one thing: a real llamafile server was pointed at this unchanged adapter and
+  its `/metrics` output matched. Every fixture and test exercising the parser
+  and diff arithmetic (`llamacpp-*.prom`) is a llama.cpp capture, not a
+  llamafile one — reused because the two publish identical metric names, not
+  because a llamafile-specific capture exists.
+- **The "anything else" row's "live" mark is about the mechanism, not those
+  three products by name.** The universal layer (`message.part.delta` /
+  `message.updated`) is the most-exercised code path in this plugin — every
+  engine above sits on top of it — so it is thoroughly live-tested. Ollama,
+  MLX-LM and LM Studio specifically have not each been run against this
+  plugin; they're named as examples of what falls into this row, not as
+  engines individually confirmed. LM Studio's own dedicated enrichment is
+  still unbuilt (see Roadmap).
 
 ## Adding an engine to `opencode.json`
 
@@ -362,8 +379,9 @@ The floor is 1.18.0 because `dist/tui.d.ts` is byte-identical across every
   telemetry endpoint at all.
 - **Worth a look, not yet built**: **Modular MAX serve** (rich `maxserve_*`
   metrics including TTFT and inter-token latency, but Apple Silicon support
-  unconfirmed); (llamafile is done — it did work with the
-  `llamacpp` adapter unchanged.)
+  unconfirmed).
+- ~~**llamafile**~~ — done: it works with the `llamacpp` adapter unchanged,
+  confirmed live.
 - ~~**KoboldCpp**~~ — done and live-validated. The Mac arm64 binary is 64MB,
   not the ~700MB guessed here earlier; `/api/extra/perf` needs no flag.
 - ~~**vllm-metal**~~ — done: confirmed the existing `vllm` adapter works
