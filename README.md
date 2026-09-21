@@ -28,7 +28,9 @@ carrying a stale reading.
 
 ### Via OpenCode
 
-`opencode plugin @banburist/opencode-hud`
+```bash
+opencode plugin @banburist/opencode-hud
+```
 
 ### Via Download
 
