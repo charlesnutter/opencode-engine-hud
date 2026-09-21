@@ -18,11 +18,10 @@ carrying a stale reading.
 ## Contents
 
 - [Install](#install)
-- [Configuration](#configuration)
+- [Configuration](#configuration-optional)
 - [Supported Engines](#supported-engines)
 - [Engine Details](#engine-details)
 - [Adding an Engine](#adding-an-engine)
-- [Local Development](#local-development)
 - [Roadmap](#roadmap)
 
 ## Install
@@ -48,7 +47,7 @@ Requires OpenCode ≥ 1.18.0. This is a **TUI plugin**, so it goes in
 
 Then restart OpenCode with the sidebar open.
 
-## Configuration
+## Configuration (optional)
 
 Options are passed in the `tui.json` plugin entry; each also has an env
 fallback. All are optional — an engine that isn't running or isn't configured
@@ -75,12 +74,9 @@ just falls back to the universal layer.
 
 Every provider gets the **universal** line for free, built from OpenCode's
 own per-turn events — decode rate, TTFT, exact token counts, no engine
-endpoint needed. The provider ids below additionally get an **enrichment**
-line, their own server telemetry merged in; get the id exactly right (see
-[Adding an Engine](#adding-an-engine)) or you get the universal line only.
-Every figure is one turn, not a running total — a turn that calls tools
-issues one request per round trip, and multi-request turns are labelled
-where the engine allows it.
+endpoint needed. The provider ids below get their own server telemetry merged in.
+
+Get the id exactly right (see [Adding an Engine](#adding-an-engine)) or you get the universal line only. Every figure is one turn, not a running total — a turn that calls tools issues one request per round trip, and multi-request turns are labelled where the engine allows it.
 
 | Provider | tok/s | TTFT | Prefill tok/s | Exact tokens | Cache info | Extras | Validated |
 |---|---|---|---|---|---|---|---|
@@ -98,12 +94,11 @@ where the engine allows it.
 | [`lmdeploy`](#lmdeploy) | ✅ | ✅ | ✅ | ✅ | ❌ | — | synthetic |
 | anything else | ✅ | ✅ | ❌ | ✅ | ❌ | — | live |
 
-`Validated` — **live**: run against a real server, deltas checked against its
-own response. **derived**: no real server available; test input is a real
-vLLM capture with the metric prefix swapped (Aphrodite is a vLLM fork
-publishing the identical shape). **synthetic**: no real server available;
-values are fixed by hand from the engine's source to make the arithmetic
-checkable, not measured.
+`Validated` — **live**: run against a real server, deltas checked against
+its own response. **derived**: a real vLLM capture with the metric prefix
+swapped (Aphrodite is a vLLM fork, identical shape). **synthetic**: values
+fixed by hand from source to make the arithmetic checkable, not measured
+(`aphrodite`/`lmdeploy` are both CUDA-only, unavailable here).
 
 ## Engine Details
 
@@ -130,10 +125,9 @@ time a first token against.
 
 ### `llamacpp` — llama.cpp
 
-Default port 8080. Start with `--metrics` (off by default; without it this
-falls back to the universal layer silently). Use the classic single-model
-`llama-server` binary, not the multi-model router — it exposes a different
-`/props` shape this adapter doesn't read.
+Default port 8080. Start with `--metrics` (off by default). Use the classic
+single-model `llama-server` binary, not the multi-model router — it exposes
+a different `/props` shape this adapter doesn't read.
 
 ```bash
 llama-server --hf-repo <user>/<repo> --hf-file <file>.gguf \
@@ -304,49 +298,14 @@ The shape is the same for any OpenAI-compatible server:
 [Supported Engines](#supported-engines) table to get that engine's richer
 line; any other id still works fully, with the universal layer only.
 
-## Local Development
-
-The runtime (SolidJS / opentui) is provided by OpenCode, so no build step or
-`npm install` is needed to run it — point `tui.json` at your working copy:
-
-```jsonc
-{ "plugin": [["/Users/you/dev/opencode-hud", { "omlxApiKey": "…" }]] }
-```
-
-Restart OpenCode to reload. For type-checking and the fixture tests (these
-don't need the OpenCode runtime, so `npm install` is needed only for these):
-
-```bash
-npm install
-npm run typecheck
-npm test
-```
-
-`@opencode-ai/plugin` and `@opencode-ai/sdk` are pinned in `devDependencies`
-to exactly the version floor declared in `engines.opencode`, not to a `>=`
-range — a range resolves to the newest published version, which is how the
-floor previously went stale without the typecheck ever catching it. Pinning
-means `npm run typecheck` fails if the floor is ever raised past what the
-code needs, or lowered past what it supports.
-
-The floor is 1.18.0 because `dist/tui.d.ts` is byte-identical across every
-1.18.x release, so every API used here — `lifecycle.signal`,
-`lifecycle.onDispose`, `slots.register`, the `sidebar_footer` slot and
-`event.on` — is unchanged across the line.
-
 ## Roadmap
 
 - LM Studio enrichment — low value; see [Anything else](#anything-else).
-- **Checked and ruled out** (universal layer only, no server-wide telemetry
-  exists): **ExLlamaV3 / TabbyAPI** — despite third-party claims of a
-  Prometheus endpoint, there is none in its source; **lightning-mlx** — no
-  telemetry endpoint at all.
-- **Worth a look, not yet built**: **Modular MAX serve** (rich `maxserve_*`
-  metrics including TTFT and inter-token latency, but Apple Silicon support
-  unconfirmed).
+- **Ruled out** (universal layer only, no server-wide telemetry exists):
+  **ExLlamaV3 / TabbyAPI** — no Prometheus endpoint in its source, despite
+  third-party claims otherwise. **lightning-mlx** — no telemetry endpoint.
+- **TBD**: Modular MAX serve.
 - An optional keybind to toggle the panel independently of the sidebar.
-- Publish to npm (`@banburist/opencode-hud`) and list in the [OpenCode
-  ecosystem](https://opencode.ai/docs/ecosystem#plugins).
 
 ## License
 
