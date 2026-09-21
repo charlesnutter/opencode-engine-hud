@@ -1,0 +1,33 @@
+name: test
+
+# Runs `npm test` on a clean machine, which is the whole point: local `npm
+# install` can hide a stale node_modules or a global tool the repo doesn't
+# actually declare. This is B7's fix (pin @opencode-ai/plugin and sdk to the
+# exact engines.opencode floor, not a >= range) verified somewhere that
+# can't already have a newer version cached — `npm ci` installs exactly what
+# package-lock.json pins, so this genuinely re-tests the declared floor on
+# every push, not just on the machine that last ran `npm install`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # test/*.mjs run under bun, per package.json's own test script.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: npm ci
+
+      - run: npm test
