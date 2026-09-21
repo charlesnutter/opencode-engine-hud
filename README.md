@@ -302,8 +302,7 @@ line; any other id still works fully, with the universal layer only.
 
 - LM Studio enrichment — low value; see [Anything else](#anything-else).
 - **Ruled out** (universal layer only, no server-wide telemetry exists):
-  **ExLlamaV3 / TabbyAPI** — no Prometheus endpoint in its source, despite
-  third-party claims otherwise. **lightning-mlx** — no telemetry endpoint.
+  **ExLlamaV3 / TabbyAPI** — no Prometheus endpoint. **lightning-mlx** — no telemetry endpoint.
 - **TBD**: Modular MAX serve.
 - An optional keybind to toggle the panel independently of the sidebar.
 
