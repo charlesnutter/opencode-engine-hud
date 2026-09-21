@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@banburist/opencode-hud",
-  "version": "0.1.0",
+  "name": "@banburist/opencode-engine-hud",
+  "version": "0.1.1",
   "description": "Live local-inference telemetry (tok/s, TTFT, prefill) pinned to the OpenCode sidebar.",
   "keywords": [
     "opencode",
@@ -23,11 +23,11 @@
   "author": "charlesnutter",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/charlesnutter/opencode-hud.git"
+    "url": "git+https://github.com/charlesnutter/opencode-engine-hud.git"
   },
-  "homepage": "https://github.com/charlesnutter/opencode-hud#readme",
+  "homepage": "https://github.com/charlesnutter/opencode-engine-hud#readme",
   "bugs": {
-    "url": "https://github.com/charlesnutter/opencode-hud/issues"
+    "url": "https://github.com/charlesnutter/opencode-engine-hud/issues"
   },
   "publishConfig": {
     "access": "public"

@@ -1,3 +1,10 @@
+## [0.1.1] – 2026-09-21
+### Changed
+- Renamed `@banburist/opencode-hud` → `@banburist/opencode-engine-hud`
+  (repo, plugin id, npm package). Published under the old scope for under a
+  day with no adoption, so renamed now rather than later. The old package
+  is deprecated on npm, pointing here.
+
 ## [0.1.0] – 2026-09-21
 ### Added
 - Universal + Tier 2 telemetry for 12 provider ids across 7 engines

@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-// opencode-hud — persistent per-turn local-inference stats in the sidebar.
+// opencode-engine-hud — persistent per-turn local-inference engine telemetry
+// in the sidebar.
 //
 // Two tiers of data:
 //   1. Universal layer — every provider OpenCode talks to. Built from OpenCode's
@@ -19,7 +20,7 @@
 //   omlxBaseUrl     (OMLX_BASE_URL)       default http://127.0.0.1:8099
 //   omlxApiKey      (OMLX_API_KEY)        required to read oMLX; no default
 //
-//   "plugin": [["@banburist/opencode-hud", { "omlxApiKey": "…" }]]
+//   "plugin": [["@banburist/opencode-engine-hud", { "omlxApiKey": "…" }]]
 import type { RGBA, TextRenderable } from "@opentui/core"
 import { httpJson, httpText, type HttpOptions } from "./http"
 import { fetchMtplxLatest, formatMtplxLine } from "./adapters/mtplx"
@@ -102,7 +103,7 @@ function trackSlotSessionId(args: unknown[]): void {
 function dbg(msg: string) {
   if (!HUD_DEBUG) return
   try {
-    appendFileSync("/tmp/opencode-hud-debug.log", `${new Date().toISOString()} ${msg}\n`)
+    appendFileSync("/tmp/opencode-engine-hud-debug.log", `${new Date().toISOString()} ${msg}\n`)
   } catch {}
 }
 
@@ -530,7 +531,7 @@ const tui: TuiPlugin = async (api, options) => {
 }
 
 const plugin: TuiPluginModule & { id: string } = {
-  id: "opencode-hud",
+  id: "opencode-engine-hud",
   tui,
 }
 
