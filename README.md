@@ -302,13 +302,13 @@ Requires OpenCode ≥ 1.18.0. This is a **TUI plugin**, so it goes in
 {
   "$schema": "https://opencode.ai/tui.json",
   "plugin": [
-    ["@charlesnutter/opencode-hud", { "omlxApiKey": "<your oMLX /v1 API key>" }]
+    ["@banburist/opencode-hud", { "omlxApiKey": "<your oMLX /v1 API key>" }]
   ]
 }
 ```
 
 Then restart OpenCode with the sidebar open. (Once published, `opencode plugin
-@charlesnutter/opencode-hud` can add it for you.)
+@banburist/opencode-hud` can add it for you.)
 
 ## Configuration
 
@@ -389,7 +389,7 @@ The floor is 1.18.0 because `dist/tui.d.ts` is byte-identical across every
 - ~~A live vLLM/SGLang server~~ — done: both are now live-validated
   (vLLM via vllm-metal, SGLang via its MLX backend).
 - An optional keybind to toggle the panel independently of the sidebar.
-- Publish to npm (`@charlesnutter/opencode-hud`) and list in the [OpenCode
+- Publish to npm (`@banburist/opencode-hud`) and list in the [OpenCode
   ecosystem](https://opencode.ai/docs/ecosystem#plugins).
 
 ## License

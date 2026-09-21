@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@charlesnutter/opencode-hud",
+  "name": "@banburist/opencode-hud",
   "version": "0.1.0",
   "description": "Live local-inference stats (MTPLX, oMLX) pinned to the OpenCode sidebar.",
   "keywords": [
@@ -23,6 +23,9 @@
   "homepage": "https://github.com/charlesnutter/opencode-hud#readme",
   "bugs": {
     "url": "https://github.com/charlesnutter/opencode-hud/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "type": "module",
   "exports": {

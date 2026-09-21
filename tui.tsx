@@ -19,7 +19,7 @@
 //   omlxBaseUrl     (OMLX_BASE_URL)       default http://127.0.0.1:8099
 //   omlxApiKey      (OMLX_API_KEY)        required to read oMLX; no default
 //
-//   "plugin": [["@charlesnutter/opencode-hud", { "omlxApiKey": "…" }]]
+//   "plugin": [["@banburist/opencode-hud", { "omlxApiKey": "…" }]]
 import type { RGBA, TextRenderable } from "@opentui/core"
 import { httpJson, httpText, type HttpOptions } from "./http"
 import { fetchMtplxLatest, formatMtplxLine } from "./adapters/mtplx"
