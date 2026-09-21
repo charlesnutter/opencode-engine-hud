@@ -74,6 +74,31 @@ function describeSlotArgs(args: unknown[]): string {
     .join(" | ")
 }
 
+/**
+ * Audit B5: `ctx.theme` is redundant with `api.theme`, already read directly
+ * in SidebarFooter, so it's confirmed dead and not tracked here. The other
+ * arg, `props.session_id`, is the one piece of context genuinely unavailable
+ * elsewhere in this closure — this tracks whether it's worth acting on
+ * before building anything around it. Two questions, not one: does it ever
+ * change (does the host re-invoke this slot on a session switch, or mount it
+ * once for the plugin's lifetime?), and is more than one ever live at once
+ * (does the sidebar ever show two sessions concurrently, which the shared,
+ * unkeyed `store` would blend together)? Both need a live multi-session
+ * OpenCode instance to answer; this only records what a single session
+ * showed.
+ */
+const seenSlotSessionIds = new Set<string>()
+function trackSlotSessionId(args: unknown[]): void {
+  const props = args[1]
+  const id = props && typeof props === "object" && "session_id" in props ? (props as { session_id: unknown }).session_id : undefined
+  if (typeof id !== "string") return
+  const isNew = !seenSlotSessionIds.has(id)
+  seenSlotSessionIds.add(id)
+  dbg(
+    `slot sidebar_footer session_id: ${id}${isNew ? " (new)" : " (repeat)"} — ${seenSlotSessionIds.size} distinct so far`
+  )
+}
+
 function dbg(msg: string) {
   if (!HUD_DEBUG) return
   try {
@@ -481,7 +506,10 @@ const tui: TuiPlugin = async (api, options) => {
         // Audit B5: the registry passes (ctx, props) to slot handlers. We
         // ignore both; this records whether anything useful is being dropped.
         sidebar_footer(...args: unknown[]) {
-          if (HUD_DEBUG) dbg(`slot sidebar_footer args: ${describeSlotArgs(args)}`)
+          if (HUD_DEBUG) {
+            dbg(`slot sidebar_footer args: ${describeSlotArgs(args)}`)
+            trackSlotSessionId(args)
+          }
           return <SidebarFooter api={api} store={store} />
         },
       },
