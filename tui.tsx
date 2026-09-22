@@ -357,7 +357,12 @@ const tui: TuiPlugin = async (api, options) => {
   }).catch(() => {})
 
   let lastKey = ""
+  // Monotonic guard against out-of-order renders. `refresh` awaits an engine
+  // fetch, so two turns completing close together race: whichever adapter
+  // answers last would render last, which is not necessarily the later turn.
+  let refreshSeq = 0
   const refresh = async (info: AssistantMessage, provider: string, model: string) => {
+    const seq = ++refreshSeq
     const key = `${provider}/${model}`
     if (key !== lastKey) {
       store.text = `${provider}  ${short(model)}\n…`
@@ -410,6 +415,12 @@ const tui: TuiPlugin = async (api, options) => {
       `turns: size ${turns.size} after completing ${info.id}` +
         (info.error ? ` (ended with ${info.error.name ?? "error"})` : "")
     )
+    // Baselines and `turns` above are updated regardless; only the panel is
+    // last-writer-wins, and only the latest turn may claim it.
+    if (seq !== refreshSeq) {
+      dbg(`refresh ${seq} superseded by ${refreshSeq}, not rendering`)
+      return
+    }
     if (line) {
       store.text = line
       // Audit B6: compare this against what the sidebar actually displays.
