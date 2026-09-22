@@ -28,22 +28,43 @@ export interface Turn {
  * from prefill, which nothing here does, but OpenCode's own event stream
  * already has it for free.
  */
-export function turnRate(tokens: number, info: AssistantMessage | undefined, turn?: Turn): { decodeTokS?: number; ttft?: number; total?: number } {
+export function turnRate(
+  tokens: number,
+  info: AssistantMessage | undefined,
+  turn?: Turn
+): { decodeTokS?: number; ttft?: number; total?: number; rateWindow?: "decode" | "whole" } {
   const created = info?.time?.created
   const completed = info?.time?.completed
   const total = typeof created === "number" && typeof completed === "number" ? (completed - created) / 1000 : undefined
 
   let ttft: number | undefined
   let decodeTokS: number | undefined
+  let rateWindow: "decode" | "whole" | undefined
   if (turn) {
-    if (turn.firstAt && turn.startAt) ttft = (turn.firstAt - turn.startAt) / 1000
+    if (turn.firstAt && turn.startAt) {
+      ttft = (turn.firstAt - turn.startAt) / 1000
+      // Suppress a physically impossible reading rather than print it. These
+      // marks are TUI-side event arrivals, so delivery latency is part of the
+      // measurement: measured on a 903ms turn, the first delta landed 13ms
+      // AFTER completion, which would render `ttft 0.92s` on a 0.90s turn.
+      // This is the impossible-value guard only; an absolute floor would need
+      // a measured distribution of that latency, and there isn't one.
+      if (ttft <= 0 || (total !== undefined && ttft >= total)) ttft = undefined
+    }
     if (turn.firstAt && turn.lastAt && turn.lastAt > turn.firstAt && tokens > 0) {
       decodeTokS = tokens / ((turn.lastAt - turn.firstAt) / 1000)
+      rateWindow = "decode"
     }
   }
-  // Fall back to whole-request rate if the stream window was too short to time.
-  if (decodeTokS === undefined && tokens > 0 && total && total > 0) decodeTokS = tokens / total
-  return { decodeTokS, ttft, total }
+  // Fall back to whole-request rate if the stream window was too short to
+  // time. `rateWindow` says which one this is, because the two differ by an
+  // order of magnitude on a turn with a long wait before the first token
+  // (measured: 38.1 tok/s over a 0.97s decode window vs 3.7 over 10.03s).
+  if (decodeTokS === undefined && tokens > 0 && total && total > 0) {
+    decodeTokS = tokens / total
+    rateWindow = "whole"
+  }
+  return { decodeTokS, ttft, total, rateWindow }
 }
 
 export function universalLine(
@@ -61,14 +82,14 @@ export function universalLine(
   // 1247 generated tokens were reasoning, and this line reported 11.4 tok/s
   // where the engine's own log said 39.7 over the same 31.4s window.
   const generated = out + reason
-  const { decodeTokS, ttft, total } = turnRate(generated, info, turn)
+  const { decodeTokS, ttft, total, rateWindow } = turnRate(generated, info, turn)
 
-  const rate =
-    decodeTokS !== undefined
-      ? `${nn(decodeTokS)} tok/s${ttft !== undefined ? `  ttft ${nn(ttft, 2)}s` : ""}`
-      : ttft !== undefined
-        ? `ttft ${nn(ttft, 2)}s`
-        : ""
+  // A decode rate is left unqualified: the ttft beside it explains why the
+  // whole turn was slower. The whole-turn FALLBACK is qualified, because it
+  // is a different measurement and would otherwise pass as a decode rate.
+  const overall = rateWindow === "whole" ? " overall" : ""
+  const ttftLabel = ttft !== undefined ? `  ttft ${nn(ttft, 2)}s` : ""
+  const rate = decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s${overall}${ttftLabel}` : ttftLabel.trim()
   // OpenCode's output count excludes reasoning, so the topline adds them back.
   const totals = `${tokensLabel(generated, reason)}${total !== undefined ? `  ${nn(total, 2)}s` : ""}`
   return [`${provider}  ${short(model)}`, rate, totals].filter(Boolean).join("\n")

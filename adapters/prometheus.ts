@@ -8,6 +8,7 @@
 
 import { httpText, type HttpOptions } from "../http"
 import { sumLabeledMetric } from "../prometheus-text"
+import { nn, ni, short } from "../format"
 export interface PromSpec {
   prefix: string
   promptTokens: string
@@ -258,4 +259,48 @@ export function diffPromSamples(prev: PromSample, now: PromSample): PromDiff | n
     decodeTokS,
     prefillTokS,
   }
+}
+
+/**
+ * Renders one turn for any Prometheus engine.
+ *
+ * Extracted from the entry file, where it lived inline and was therefore
+ * untested. It takes the universal-tier fallback as an argument rather than
+ * importing Tier 1, so this adapter still imports no sibling and no entry —
+ * the caller decides what the fallback is, and this module stays a leaf.
+ *
+ * `fallback` supplies OpenCode's own turn timing for engines that publish no
+ * duration histogram (vLLM, Aphrodite). Where the engine does publish one,
+ * its measured decode rate wins, because it excludes prefill and ours cannot.
+ * `ttftExact` false means the figure is a histogram average over however many
+ * requests landed in the window, and is labelled `(avg)` to say so — an
+ * unlabelled window average presented as this turn's ttft is the mistake this
+ * argument exists to prevent.
+ */
+export function formatPromLine(
+  diff: PromDiff,
+  label: string,
+  model: string,
+  fallback: { decodeTokS?: number; total?: number; rateWindow?: "decode" | "whole" }
+): string {
+  const decodeTokS = diff.decodeTokS ?? fallback.decodeTokS
+  // The engine's own figure is a decode phase and needs no qualifier — the
+  // ttft beside it explains the rest of the turn. A whole-turn FALLBACK is
+  // qualified, because it measures something different (~10x apart on a turn
+  // with a long wait) and must not pass as a decode rate.
+  const isDecode = diff.decodeTokS !== undefined || fallback.rateWindow === "decode"
+  const overall = isDecode ? "" : " overall"
+  const total = diff.durationS ?? fallback.total
+  const ttftLabel =
+    diff.ttft !== undefined ? `  ttft ${nn(diff.ttft, 2)}s${diff.ttftExact ? "" : " (avg)"}` : ""
+  return [
+    `${label}  ${short(model)}`,
+    decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s${overall}${ttftLabel}` : ttftLabel.trim(),
+    diff.prefillTokS !== undefined ? `prefill ${ni(diff.prefillTokS)} tok/s` : "",
+    `${ni(diff.completionTokens)} tok  (${ni(diff.promptTokens)} prompt${
+      diff.cachedTokens > 0 ? `, ${ni(diff.cachedTokens)} cached` : ""
+    })${total !== undefined ? `  ${nn(total, 2)}s` : ""}`,
+  ]
+    .filter(Boolean)
+    .join("\n")
 }

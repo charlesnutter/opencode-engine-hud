@@ -39,7 +39,7 @@ import { turnRate, universalLine } from "./universal"
 import { tokensLabel, short, nn, ni } from "./format"
 import type { Turn } from "./universal"
 import type { AssistantMessage } from "@opencode-ai/sdk/v2"
-import { VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples } from "./adapters/prometheus"
+import { VLLM_SPEC, SGLANG_SPEC, APHRODITE_SPEC, VLLM_MLX_SPEC, LMDEPLOY_SPEC, fetchPromSample, diffPromSamples, formatPromLine } from "./adapters/prometheus"
 import type { PromSpec, PromSample } from "./adapters/prometheus"
 
 interface Config {
@@ -255,17 +255,7 @@ async function prometheusLine(
   // OpenCode's turn timing. The engine-derived figure is dropped when the
   // decode window is implausibly short (see MIN_DECODE_SHARE), so a
   // non-streaming caller falls back here rather than showing clock noise.
-  const fallback = turnRate(diff.completionTokens, info, turn)
-  const decodeTokS = diff.decodeTokS ?? fallback.decodeTokS
-  const total = diff.durationS ?? fallback.total
-  const ttftLabel =
-    diff.ttft !== undefined ? `  ttft ${nn(diff.ttft, 2)}s${diff.ttftExact ? "" : " (avg)"}` : ""
-  return [
-    `${label}  ${short(model)}`,
-    decodeTokS !== undefined ? `${nn(decodeTokS)} tok/s${ttftLabel}` : ttftLabel.trim(),
-    diff.prefillTokS !== undefined ? `prefill ${ni(diff.prefillTokS)} tok/s` : "",
-    `${ni(diff.completionTokens)} tok  (${ni(diff.promptTokens)} prompt${diff.cachedTokens > 0 ? `, ${ni(diff.cachedTokens)} cached` : ""})${total !== undefined ? `  ${nn(total, 2)}s` : ""}`,
-  ].filter(Boolean).join("\n")
+  return formatPromLine(diff, label, model, turnRate(diff.completionTokens, info, turn))
 }
 
 interface Store { text: string; listeners: Set<() => void> }

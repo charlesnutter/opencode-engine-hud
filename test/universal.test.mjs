@@ -85,4 +85,46 @@ test("TTFT comes from the first delta, not from completion", () => {
   assert.ok(Math.abs(turnRate(1247, splashInfo, splashTurn).ttft - 0.66) < 0.001)
 })
 
+// Two correct numbers, 10x apart: 37 tokens over a 0.97s decode window vs
+// over the whole 10.03s turn. Unlabelled, they read as a contradiction.
+
+test("a streamed turn leaves its decode rate unqualified", () => {
+  const info = { time: { created: 1000, completed: 11030 }, tokens: { output: 37, reasoning: 0 } }
+  const turn = { startAt: 1000, firstAt: 10060, lastAt: 11030 }
+  const r = turnRate(37, info, turn)
+  assert.equal(r.rateWindow, "decode")
+  assert.ok(Math.abs(r.decodeTokS - 38.1) < 0.5, String(r.decodeTokS))
+  assert.ok(!universalLine("mtplx", "m", info, turn).includes("overall"))
+})
+
+test("a whole-turn fallback rate is qualified as overall", () => {
+  const info = { time: { created: 1000, completed: 11030 }, tokens: { output: 37, reasoning: 0 } }
+  const r = turnRate(37, info, undefined)
+  assert.equal(r.rateWindow, "whole")
+  assert.ok(Math.abs(r.decodeTokS - 3.7) < 0.1, String(r.decodeTokS))
+  assert.ok(universalLine("mtplx", "m", info, undefined).includes("tok/s overall"))
+})
+
+// Measured on v2: the first delta can land after the message was marked
+// complete, because these marks are TUI-side event arrivals and delivery
+// latency is part of what they measure. Rendering that gives `ttft 0.92s` on
+// a 0.90s turn.
+
+test("a ttft at or past the end of the turn is suppressed, not shown small", () => {
+  const info = { time: { created: 1000, completed: 1903 }, tokens: { output: 37 } }
+  const turn = { startAt: 1000, firstAt: 1915, lastAt: 1903 }
+  const r = turnRate(37, info, turn)
+  assert.equal(r.ttft, undefined, `a first token cannot follow completion, got ${r.ttft}`)
+  assert.ok(!universalLine("zen", "big-pickle", info, turn).includes("ttft"))
+})
+
+test("a negative ttft is suppressed too", () => {
+  const info = { time: { created: 5000, completed: 9000 }, tokens: { output: 10 } }
+  assert.equal(turnRate(10, info, { startAt: 5000, firstAt: 4000, lastAt: 9000 }).ttft, undefined)
+})
+
+test("a normal ttft still survives the guard", () => {
+  assert.ok(Math.abs(turnRate(1247, splashInfo, splashTurn).ttft - 0.66) < 0.001)
+})
+
 console.log(`\n${passed} passed`)

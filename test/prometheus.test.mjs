@@ -14,6 +14,7 @@ import path from "node:path"
 import {
   parsePromSample,
   diffPromSamples,
+  formatPromLine,
   VLLM_SPEC,
   SGLANG_SPEC,
   APHRODITE_SPEC,
@@ -290,6 +291,109 @@ test("vLLM keeps no prefill rate (it times no prefill phase)", () => {
   const before = parsePromSample(fixture("vllm-metal-before.prom"), VLLM_SPEC)
   const now = parsePromSample(fixture("vllm-metal-after.prom"), VLLM_SPEC)
   assert.equal(diffPromSamples(before, now).prefillTokS, undefined)
+})
+
+// ---- rendering: formatPromLine ---------------------------------------------
+// Extracted from the entry file, where it was inline and therefore untested. Five engines render through this one function, so a defect here
+// is a defect in vLLM, SGLang, vllm-mlx, Aphrodite and LMDeploy at once.
+//
+// `fallback` is Tier 1's rate, passed in rather than imported so the adapter
+// stays a leaf. Engines with no duration histogram (vLLM, Aphrodite) depend
+// on it entirely.
+
+const NO_FALLBACK = { decodeTokS: undefined, total: undefined }
+
+test("Prometheus: an averaged TTFT is labelled (avg), never shown bare", () => {
+  // The whole point of ttftExact. A histogram mean over however many requests
+  // landed in the window, presented as this turn's TTFT, is the single most
+  // misleading thing this adapter could render.
+  const diff = { completionTokens: 50, promptTokens: 33, cachedTokens: 0,
+    ttft: 0.31, ttftExact: false, decodeTokS: 40 }
+  const out = formatPromLine(diff, "vLLM", "m", NO_FALLBACK)
+  assert.ok(out.includes("ttft 0.31s (avg)"), out)
+})
+
+test("Prometheus: an exact TTFT carries no (avg) qualifier", () => {
+  const diff = { completionTokens: 50, promptTokens: 33, cachedTokens: 0,
+    ttft: 0.31, ttftExact: true, decodeTokS: 40 }
+  const out = formatPromLine(diff, "vllm-mlx", "m", NO_FALLBACK)
+  assert.ok(out.includes("ttft 0.31s"), out)
+  assert.ok(!out.includes("(avg)"), "exact must not be hedged")
+})
+
+test("Prometheus: Tier 1's rate is used when the engine publishes none", () => {
+  // vLLM and Aphrodite have no duration histogram, so decodeTokS is absent
+  // and the universal layer's figure is all there is.
+  const diff = { completionTokens: 50, promptTokens: 33, cachedTokens: 0,
+    ttftExact: true, decodeTokS: undefined, durationS: undefined }
+  const out = formatPromLine(diff, "vLLM", "m", { decodeTokS: 22.5, total: 2.2 })
+  assert.ok(out.includes("22.5 tok/s"), out)
+  assert.ok(out.includes("2.20s"), out)
+})
+
+test("Prometheus: the engine's own rate wins over Tier 1's", () => {
+  // Where the engine measures decode as its own phase, its figure excludes
+  // prefill and ours cannot — so it must not be overridden by the fallback.
+  const diff = { completionTokens: 50, promptTokens: 33, cachedTokens: 0,
+    ttftExact: true, decodeTokS: 41.7, durationS: 1.2 }
+  const out = formatPromLine(diff, "LMDeploy", "m", { decodeTokS: 22.5, total: 2.2 })
+  assert.ok(out.includes("41.7 tok/s"), out)
+  assert.ok(!out.includes("22.5"), "the fallback must not leak through")
+  assert.ok(out.includes("1.20s"), "and the engine's own duration wins too")
+})
+
+test("Prometheus: with neither rate available, no rate line is invented", () => {
+  const diff = { completionTokens: 50, promptTokens: 33, cachedTokens: 0,
+    ttftExact: true, decodeTokS: undefined }
+  const out = formatPromLine(diff, "vLLM", "m", NO_FALLBACK)
+  assert.ok(!out.includes("?"), out)
+  assert.ok(!out.includes("tok/s"), "no rate at all rather than a placeholder")
+  assert.ok(out.includes("50 tok"), "exact token counts still survive")
+})
+
+test("Prometheus: cached tokens are named only when some were reused", () => {
+  const cold = { completionTokens: 50, promptTokens: 33, cachedTokens: 0, ttftExact: true }
+  assert.ok(!formatPromLine(cold, "vLLM", "m", NO_FALLBACK).includes("cached"))
+  const warm = { ...cold, cachedTokens: 34 }
+  assert.ok(formatPromLine(warm, "vLLM", "m", NO_FALLBACK).includes("34 cached"))
+})
+
+test("Prometheus: a prefill rate appears only for an engine that times it", () => {
+  const without = { completionTokens: 50, promptTokens: 33, cachedTokens: 0, ttftExact: true }
+  assert.ok(!formatPromLine(without, "vLLM", "m", NO_FALLBACK).includes("prefill"))
+  const with_ = { ...without, prefillTokS: 233 }
+  assert.ok(formatPromLine(with_, "LMDeploy", "m", NO_FALLBACK).includes("prefill 233 tok/s"))
+})
+
+test("Prometheus: renders from a real live vLLM capture", () => {
+  const diff = diffPromSamples(
+    parsePromSample(fixture("vllm-metal-before.prom"), VLLM_SPEC),
+    parsePromSample(fixture("vllm-metal-after.prom"), VLLM_SPEC)
+  )
+  const out = formatPromLine(diff, "vLLM", "Qwen2.5-0.5B", { decodeTokS: 18.2, total: 1.9 })
+  assert.ok(out.split("\n")[0].startsWith("vLLM  "), out)
+  // The fixture header records usage {prompt_tokens: 35, completion_tokens: 35}.
+  assert.ok(out.includes("35 tok"), out)
+  assert.ok(out.includes("35 prompt"), out)
+  assert.ok(!out.includes("?"), out)
+})
+
+// A whole-turn fallback measures something different from a decode rate --
+// ~10x apart on a turn with a long wait -- so it is qualified. The engine's
+// own figure and a streamed fallback are both decode phases and are not.
+
+test("Prometheus: a whole-turn fallback rate is qualified as overall", () => {
+  const diff = { completionTokens: 37, promptTokens: 33, cachedTokens: 0, ttftExact: true }
+  const out = formatPromLine(diff, "vLLM", "m", { decodeTokS: 3.7, total: 10.03, rateWindow: "whole" })
+  assert.ok(out.includes("3.7 tok/s overall"), out)
+})
+
+test("Prometheus: a streamed fallback or the engine's own rate stays unqualified", () => {
+  const diff = { completionTokens: 37, promptTokens: 33, cachedTokens: 0, ttftExact: true }
+  const streamed = formatPromLine(diff, "vLLM", "m", { decodeTokS: 38.1, total: 10.03, rateWindow: "decode" })
+  assert.ok(streamed.includes("38.1 tok/s") && !streamed.includes("overall"), streamed)
+  const engine = formatPromLine({ ...diff, decodeTokS: 41.7 }, "LMDeploy", "m", { decodeTokS: 3.7, rateWindow: "whole" })
+  assert.ok(engine.includes("41.7 tok/s") && !engine.includes("overall"), engine)
 })
 
 console.log(`\n${passed} passed`)
