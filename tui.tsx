@@ -125,6 +125,19 @@ async function omlxLine(cfg: Config, http: HttpOptions): Promise<string | null> 
   return formatOmlxLine(now, prev)
 }
 
+// Why a counter-diff adapter declined, when the reason is not a failure. The
+// universal line that follows is complete and correct but is not the engine's
+// own, and without saying so the figures change shape on the next turn -- the
+// rate can move by an order of magnitude, which reads as a bug.
+// - pendingBaseline: no reading to subtract from yet (first turn since launch;
+//   for llama.cpp/llamafile only when startup priming missed).
+// - sharedWindow: a Prometheus window held other requests besides this turn,
+//   so its figures were declined as unattributable (see formatPromLine).
+interface Tier2Note {
+  pendingBaseline: boolean
+  sharedWindow: boolean
+}
+
 // ---- Tier 2: llama.cpp / llamafile — /metrics, differenced across the turn -
 // Baseline only; parsing, differencing and formatting live in
 // adapters/llamacpp.ts. llamafile publishes the identical metric names, so it
@@ -136,13 +149,17 @@ async function llamacppLine(
   base: string,
   label: string,
   model: string,
-  http: HttpOptions
+  http: HttpOptions,
+  note: Tier2Note
 ): Promise<string | null> {
   const now = await fetchLlamaCppCounters(base, http)
   if (!now) return null // unreachable, or started without --metrics
   const prev = llamacppPrev.get(key)
   llamacppPrev.set(key, now)
-  if (!prev) return null // no baseline yet (first turn since launch)
+  if (!prev) {
+    note.pendingBaseline = true
+    return null // no baseline yet: startup priming missed
+  }
   const t = diffLlamaCppCounters(prev, now)
   return t ? formatLlamaCppLine(t, label, model) : null
 }
@@ -171,12 +188,15 @@ async function mlxServeLine(cfg: Config, model: string, http: HttpOptions): Prom
 // drafting besides. Validated live against Splash 1.0 on Apple Silicon.
 const splashPrev = new Map<string, SplashSample>()
 
-async function splashLine(base: string, model: string, http: HttpOptions): Promise<string | null> {
+async function splashLine(base: string, model: string, http: HttpOptions, note: Tier2Note): Promise<string | null> {
   const now = await fetchSplashSample(base, http)
   if (!now) return null // unreachable, or not a Splash server
   const prev = splashPrev.get(base)
   splashPrev.set(base, now)
-  if (!prev) return null // no baseline yet (first turn since launch)
+  if (!prev) {
+    note.pendingBaseline = true
+    return null // no baseline yet (first turn since launch)
+  }
   const t = diffSplashSamples(prev, now)
   if (!t) return null
 
@@ -239,13 +259,17 @@ async function prometheusLine(
   model: string,
   info: AssistantMessage | undefined,
   turn: Turn | undefined,
-  http: HttpOptions
+  http: HttpOptions,
+  note: Tier2Note
 ): Promise<string | null> {
   const now = await fetchPromSample(base, spec, http)
   if (!now) return null
   const prev = promPrev.get(providerId)
   promPrev.set(providerId, now)
-  if (!prev) return null // no baseline yet (first turn since launch)
+  if (!prev) {
+    note.pendingBaseline = true
+    return null // no baseline yet (first turn since launch)
+  }
 
   const diff = diffPromSamples(prev, now)
   if (!diff) return null
@@ -255,7 +279,9 @@ async function prometheusLine(
   // OpenCode's turn timing. The engine-derived figure is dropped when the
   // decode window is implausibly short (see MIN_DECODE_SHARE), so a
   // non-streaming caller falls back here rather than showing clock noise.
-  return formatPromLine(diff, label, model, turnRate(diff.completionTokens, info, turn))
+  const line = formatPromLine(diff, label, model, turnRate(diff.completionTokens, info, turn))
+  if (line === null) note.sharedWindow = true
+  return line
 }
 
 interface Store { text: string; listeners: Set<() => void> }
@@ -376,27 +402,28 @@ const tui: TuiPlugin = async (api, options) => {
     const http: HttpOptions = { signal: api.lifecycle.signal }
 
     // Prefer richer per-engine enrichment; fall back to the universal line.
+    const note: Tier2Note = { pendingBaseline: false, sharedWindow: false }
     let line: string | null = null
     try {
     if (provider === "mtplx") line = await mtplxLine(cfg, model, http)
     else if (provider === "omlx") line = await omlxLine(cfg, http)
-    else if (provider === "llamacpp") line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model, http)
+    else if (provider === "llamacpp") line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model, http, note)
     // llamafile is llama.cpp-derived and publishes the identical metric names,
     // so it reuses this adapter verbatim — only the URL and baseline differ.
-    else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model, http)
-    else if (provider === "splash") line = await splashLine(cfg.splashBase, model, http)
+    else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model, http, note)
+    else if (provider === "splash") line = await splashLine(cfg.splashBase, model, http, note)
     else if (provider === "mlxserve" || provider === "mlx-serve")
       line = await mlxServeLine(cfg, model, http)
     else if (provider === "koboldcpp" || provider === "kobold")
       line = await koboldLine(cfg.koboldBase, model, http)
-    else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t, http)
-    else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t, http)
+    else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t, http, note)
+    else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t, http, note)
     else if (provider === "vllmmlx" || provider === "vllm-mlx")
-      line = await prometheusLine("vllmmlx", VLLM_MLX_SPEC, cfg.vllmMlxBase, "vllm-mlx", model, info, t, http)
+      line = await prometheusLine("vllmmlx", VLLM_MLX_SPEC, cfg.vllmMlxBase, "vllm-mlx", model, info, t, http, note)
     else if (provider === "aphrodite")
-      line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t, http)
+      line = await prometheusLine("aphrodite", APHRODITE_SPEC, cfg.aphroditeBase, "Aphrodite", model, info, t, http, note)
     else if (provider === "lmdeploy")
-      line = await prometheusLine("lmdeploy", LMDEPLOY_SPEC, cfg.lmdeployBase, "LMDeploy", model, info, t, http)
+      line = await prometheusLine("lmdeploy", LMDEPLOY_SPEC, cfg.lmdeployBase, "LMDeploy", model, info, t, http, note)
     } catch (e: unknown) {
       // An adapter failing must never blank the panel: fall through to the
       // universal line. Silent for users, visible with OPENCODE_HUD_DEBUG —
@@ -406,7 +433,14 @@ const tui: TuiPlugin = async (api, options) => {
       const err = e instanceof Error ? e : new Error(String(e))
       dbg(`${provider} adapter threw: ${err.name}: ${err.message}\n${err.stack ?? ""}`)
     }
-    if (!line) line = universalLine(provider, model, info, t)
+    if (!line) {
+      line = universalLine(provider, model, info, t)
+      // Say why this turn looks different from the next one. Only for a
+      // declined adapter, never a failed one: the figures above are complete,
+      // only their source differs.
+      if (note.pendingBaseline) line += "\nengine telemetry from the next turn"
+      else if (note.sharedWindow) line += "\nengine data skipped: overlapping requests"
+    }
     turns.delete(info.id)
     // Audit C3: eviction only fires at the 64-entry bound, so it cannot show a
     // slow leak. This does: the map should return to 0 between turns, and any

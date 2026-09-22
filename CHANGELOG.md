@@ -1,3 +1,24 @@
+## [Unreleased]
+### Added
+- A turn whose engine figures were declined now says why:
+  `engine telemetry from the next turn` when there is no baseline yet,
+  `engine data skipped: overlapping requests` when the engine's window held
+  other requests.
+
+### Fixed
+- A rate measured over the whole turn, used when the stream window cannot be
+  timed, is now labelled `overall`. It could be ~10x lower than the decode
+  rate and was shown as if it were one.
+- A time-to-first-token at or past the end of its own turn, or negative, is
+  now suppressed rather than shown.
+- Two turns completing close together could render in the wrong order; only
+  the latest turn now updates the panel.
+- `vllm`, `sglang`, `vllmmlx`, `aphrodite` and `lmdeploy` rendered figures
+  for several requests as one turn's whenever other requests reached the
+  engine in the same window. Measured on the successor plugin: a 46-token
+  answer showed `116135.1 tok/s` over `8594 tok`. Such a turn now shows the
+  universal line with the notice above.
+
 ## [0.1.1] – 2026-09-21
 ### Changed
 - Renamed `@banburist/opencode-hud` → `@banburist/opencode-engine-hud`
