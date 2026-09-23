@@ -17,7 +17,13 @@
   for several requests as one turn's whenever other requests reached the
   engine in the same window. Measured on the successor plugin: a 46-token
   answer showed `116135.1 tok/s` over `8594 tok`. Such a turn now shows the
-  universal line with the notice above.
+  universal line with the notice above. A window is this turn's only when
+  the engine's token count matches OpenCode's own: a non-streamed request
+  records no time-to-first-token, so counting those alone missed it.
+- On `sglang`, `vllmmlx` and `lmdeploy`, the turn's total and engine-derived
+  decode rate were averaged with any other request in the window, such as a
+  rejected ~0s title request, which halved the total. The engine's duration
+  is now used only when exactly one was recorded; otherwise OpenCode's timing.
 
 ## [0.1.1] – 2026-09-21
 ### Changed

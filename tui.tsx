@@ -279,7 +279,17 @@ async function prometheusLine(
   // OpenCode's turn timing. The engine-derived figure is dropped when the
   // decode window is implausibly short (see MIN_DECODE_SHARE), so a
   // non-streaming caller falls back here rather than showing clock noise.
-  const line = formatPromLine(diff, label, model, turnRate(diff.completionTokens, info, turn))
+  // OpenCode's own count for this turn; the adapter declines the engine line
+  // when the window's count differs (another request's tokens).
+  const hostTok = (info?.tokens?.output ?? 0) + (info?.tokens?.reasoning ?? 0)
+  dbg(
+    `${providerId} window: ttft ${diff.requests.ttft}, duration ${diff.requests.duration}; ` +
+      `engine ${diff.completionTokens} tok vs host ${hostTok} tok`
+  )
+  const line = formatPromLine(diff, label, model, {
+    ...turnRate(diff.completionTokens, info, turn),
+    tokens: hostTok,
+  })
   if (line === null) note.sharedWindow = true
   return line
 }
