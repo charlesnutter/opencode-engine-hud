@@ -77,19 +77,30 @@ export function recoverLatest(
 }
 
 /**
+ * OpenCode's own time to first token, for an engine that reports none. Always
+ * labelled `(host)`: it spans queue, network and event delivery as well as
+ * prefill, so it is not the engine's measurement.
+ */
+const hostTtftLine = (hostTtft: number | undefined): string =>
+  hostTtft !== undefined ? `ttft ${nn(hostTtft, 2)}s (host)` : ""
+
+/**
  * Renders the panel block. With no baseline, a model switch, or no new
  * request, it shows the server's lifetime averages LABELLED as such; there is
  * no honest per-turn figure to give in those cases.
  */
-export function formatOmlxLine(now: OmlxSample, prev: OmlxSample | undefined): string {
+export function formatOmlxLine(now: OmlxSample, prev: OmlxSample | undefined, hostTtft?: number): string {
   const header = `oMLX  ${short(now.model ?? "")}`
 
   if (!prev || prev.model !== now.model || now.requests <= prev.requests) {
     return [
       header,
       `${nn(now.avgGen)} tok/s (server avg)`,
+      hostTtftLine(hostTtft),
       `prefill ${ni(now.avgPrefill)} tok/s (avg)`,
-    ].join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
   }
 
   // More than one request landed in the window (an agentic turn issuing
@@ -119,9 +130,12 @@ export function formatOmlxLine(now: OmlxSample, prev: OmlxSample | undefined): s
   return [
     header,
     `${nn(decode)} tok/s${decodeLabel}`,
+    hostTtftLine(hostTtft),
     `prefill ${ni(prefill)} tok/s${prefillLabel}`,
     `${ni(completion)} tok  (${ni(promptTokens)} prompt${cached > 0 ? `, ${ni(cached)} cached` : ""})`,
-  ].join("\n")
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 export async function fetchOmlxSample(

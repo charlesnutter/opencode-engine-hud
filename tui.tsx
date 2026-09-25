@@ -117,12 +117,12 @@ async function mtplxLine(cfg: Config, model: string, http: HttpOptions): Promise
 // Baseline only; the recovery arithmetic and formatting live in omlx.ts.
 let omlxPrev: OmlxSample | undefined
 
-async function omlxLine(cfg: Config, http: HttpOptions): Promise<string | null> {
+async function omlxLine(cfg: Config, http: HttpOptions, hostTtft?: number): Promise<string | null> {
   const now = await fetchOmlxSample(cfg.omlxBase, cfg.omlxKey, http)
   if (!now) return null
   const prev = omlxPrev
   omlxPrev = now
-  return formatOmlxLine(now, prev)
+  return formatOmlxLine(now, prev, hostTtft)
 }
 
 // Why a counter-diff adapter declined, when the reason is not a failure. The
@@ -150,7 +150,8 @@ async function llamacppLine(
   label: string,
   model: string,
   http: HttpOptions,
-  note: Tier2Note
+  note: Tier2Note,
+  hostTtft?: number
 ): Promise<string | null> {
   const now = await fetchLlamaCppCounters(base, http)
   if (!now) return null // unreachable, or started without --metrics
@@ -161,7 +162,7 @@ async function llamacppLine(
     return null // no baseline yet: startup priming missed
   }
   const t = diffLlamaCppCounters(prev, now)
-  return t ? formatLlamaCppLine(t, label, model) : null
+  return t ? formatLlamaCppLine(t, label, model, hostTtft) : null
 }
 
 // ---- Tier 2: mlx-serve enrichment — /v1/metrics/requests, id-keyed --------
@@ -188,7 +189,13 @@ async function mlxServeLine(cfg: Config, model: string, http: HttpOptions): Prom
 // drafting besides. Validated live against Splash 1.0 on Apple Silicon.
 const splashPrev = new Map<string, SplashSample>()
 
-async function splashLine(base: string, model: string, http: HttpOptions, note: Tier2Note): Promise<string | null> {
+async function splashLine(
+  base: string,
+  model: string,
+  http: HttpOptions,
+  note: Tier2Note,
+  hostTtft?: number
+): Promise<string | null> {
   const now = await fetchSplashSample(base, http)
   if (!now) return null // unreachable, or not a Splash server
   const prev = splashPrev.get(base)
@@ -206,6 +213,8 @@ async function splashLine(base: string, model: string, http: HttpOptions, note: 
   return [
     `Splash  ${short(model)}`,
     t.decodeTokS !== undefined ? `${nn(t.decodeTokS)} tok/s` : "",
+    // Splash times no first token of its own: OpenCode's, labelled as such.
+    hostTtft !== undefined ? `ttft ${nn(hostTtft, 2)}s (host)` : "",
     t.prefillTokS !== undefined ? `prefill ${ni(t.prefillTokS)} tok/s` : "",
     `${ni(t.completionTokens)} tok  ${nn(t.prefillS + t.decodeS, 2)}s`,
     `${ni(prompt)} prompt${t.cachedTokens > 0 ? `, ${ni(t.cachedTokens)} cached` : ""}`,
@@ -224,14 +233,14 @@ async function splashLine(base: string, model: string, http: HttpOptions, note: 
 // koboldcpp.ts). Validated live against KoboldCpp v1.121 on Apple Silicon.
 const koboldPrevGens = new Map<string, number>()
 
-async function koboldLine(base: string, model: string, http: HttpOptions): Promise<string | null> {
+async function koboldLine(base: string, model: string, http: HttpOptions, hostTtft?: number): Promise<string | null> {
   const perf = await fetchKoboldPerf(base, http)
   if (!perf) return null // unreachable, or not a KoboldCpp server
   const prev = koboldPrevGens.get(base)
   koboldPrevGens.set(base, perf.total_gens)
   const t = koboldTurn(perf, prev)
   if (!t) return null // nothing new to attribute to this turn
-  return formatKoboldLine(t, model)
+  return formatKoboldLine(t, model, hostTtft)
 }
 
 // ---- Tier 2: vLLM / SGLang enrichment — Prometheus, diffed across the turn -
@@ -413,19 +422,25 @@ const tui: TuiPlugin = async (api, options) => {
 
     // Prefer richer per-engine enrichment; fall back to the universal line.
     const note: Tier2Note = { pendingBaseline: false, sharedWindow: false }
+    // OpenCode's own ttft, for the five engines that report none of their
+    // own (omlx, llamacpp, llamafile, splash, koboldcpp). Measured directly,
+    // so no derived figure crosses from host to engine.
+    const hostTtft = turnRate(0, info, t).ttft
     let line: string | null = null
     try {
     if (provider === "mtplx") line = await mtplxLine(cfg, model, http)
-    else if (provider === "omlx") line = await omlxLine(cfg, http)
-    else if (provider === "llamacpp") line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model, http, note)
+    else if (provider === "omlx") line = await omlxLine(cfg, http, hostTtft)
+    else if (provider === "llamacpp")
+      line = await llamacppLine("llamacpp", cfg.llamacppBase, "llama.cpp", model, http, note, hostTtft)
     // llamafile is llama.cpp-derived and publishes the identical metric names,
     // so it reuses this adapter verbatim — only the URL and baseline differ.
-    else if (provider === "llamafile") line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model, http, note)
-    else if (provider === "splash") line = await splashLine(cfg.splashBase, model, http, note)
+    else if (provider === "llamafile")
+      line = await llamacppLine("llamafile", cfg.llamafileBase, "llamafile", model, http, note, hostTtft)
+    else if (provider === "splash") line = await splashLine(cfg.splashBase, model, http, note, hostTtft)
     else if (provider === "mlxserve" || provider === "mlx-serve")
       line = await mlxServeLine(cfg, model, http)
     else if (provider === "koboldcpp" || provider === "kobold")
-      line = await koboldLine(cfg.koboldBase, model, http)
+      line = await koboldLine(cfg.koboldBase, model, http, hostTtft)
     else if (provider === "vllm") line = await prometheusLine("vllm", VLLM_SPEC, cfg.vllmBase, "vLLM", model, info, t, http, note)
     else if (provider === "sglang") line = await prometheusLine("sglang", SGLANG_SPEC, cfg.sglangBase, "SGLang", model, info, t, http, note)
     else if (provider === "vllmmlx" || provider === "vllm-mlx")

@@ -160,15 +160,24 @@ export function koboldTurn(now: KoboldPerf, prevTotalGens: number | undefined): 
 }
 
 /**
+ * OpenCode's own time to first token, for an engine that reports none. Always
+ * labelled `(host)`: it spans queue, network and event delivery as well as
+ * prefill, so it is not the engine's measurement.
+ */
+const hostTtftLine = (hostTtft: number | undefined): string =>
+  hostTtft !== undefined ? `ttft ${nn(hostTtft, 2)}s (host)` : ""
+
+/**
  * Renders the panel block. When more than one generation landed in the
  * window, appends a note that the figures above are the LAST generation
  * only, not a sum across the window — there is nothing here to sum them
  * with, since the endpoint keeps no history beyond the most recent request.
  */
-export function formatKoboldLine(t: KoboldTurn, model: string): string {
+export function formatKoboldLine(t: KoboldTurn, model: string, hostTtft?: number): string {
   return [
     `KoboldCpp  ${short(model)}`,
     t.decodeTokS !== undefined ? `${nn(t.decodeTokS)} tok/s` : "",
+    hostTtftLine(hostTtft),
     t.prefillTokS !== undefined ? `prefill ${ni(t.prefillTokS)} tok/s` : "",
     `${ni(t.completionTokens)} tok  ${nn(t.prefillS + t.decodeS, 2)}s`,
     t.draftAcceptRate !== undefined ? `draft ${ni(t.draftAcceptRate * 100)}% accepted` : "",
