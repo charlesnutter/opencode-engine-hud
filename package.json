@@ -34,9 +34,6 @@
   },
   "type": "module",
   "exports": {
-    ".": {
-      "import": "./tui.tsx"
-    },
     "./tui": {
       "import": "./tui.tsx"
     }
