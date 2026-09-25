@@ -4,6 +4,18 @@
   `engine telemetry from the next turn` when there is no baseline yet,
   `engine data skipped: overlapping requests` when the engine's window held
   other requests.
+- `omlx`, `llamacpp`, `llamafile`, `splash` and `koboldcpp` report no time to
+  first token of their own; their block now shows OpenCode's, labelled
+  `ttft N.NNs (host)` so it is not read as the engine's.
+
+### Changed
+- `package.json` no longer declares a bare `.` export. OpenCode loads the
+  plugin through `./tui`; the bare entry was unused, and a bare entry is the
+  shape that made the successor plugin's server process load its TUI code.
+- README: engine telemetry replaces the universal line (it read "merged
+  in"); a key for ✅/🟡/❌; a First Turn Data section and column; the
+  `npm install` note; Splash, `vllm` and `vllmmlx` share port 8000 by
+  default.
 
 ### Fixed
 - A rate measured over the whole turn, used when the stream window cannot be

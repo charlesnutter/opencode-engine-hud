@@ -51,6 +51,10 @@ Requires OpenCode ≥ 1.18.0. This is a **TUI plugin**, so it goes in
 
 Then restart OpenCode with the sidebar open.
 
+`npm install @banburist/opencode-engine-hud` on its own does not install the
+plugin: OpenCode only loads plugins listed in `tui.json` (or added with
+`opencode plugin`).
+
 ## Configuration (optional)
 
 Options are passed in the `tui.json` plugin entry; each also has an env
@@ -78,25 +82,50 @@ just falls back to the universal layer.
 
 Every provider gets the **universal** line for free, built from OpenCode's
 own per-turn events — decode rate, TTFT, exact token counts, no engine
-endpoint needed. The provider ids below get their own server telemetry merged in.
+endpoint needed. For the provider ids below, the engine's own telemetry
+**replaces** that line: the block shows the engine's figures, and falls back
+to the universal line whenever the engine can't answer for the turn.
 
 Get the id exactly right (see [Adding an Engine](#adding-an-engine)) or you get the universal line only. Every figure is one turn, not a running total — a turn that calls tools issues one request per round trip, and multi-request turns are labelled where the engine allows it.
 
-| Provider | tok/s | TTFT | Prefill tok/s | Exact tokens | Cache info | Extras | Validated |
-|---|---|---|---|---|---|---|---|
-| [`mtplx`](#mtplx) | ✅ | ✅ | ✅ | ✅ | ❌ | MTP accept % | live |
-| [`omlx`](#omlx) | ✅ | ❌ | ✅ | ✅ | ✅ | — | live |
-| [`llamacpp`](#llamacpp) | ✅ | ❌ | ✅ | ✅ | ❌ | — | live |
-| [`llamafile`](#llamafile) | ✅ | ❌ | ✅ | ✅ | ❌ | — | live |
-| [`mlxserve`](#mlxserve) | ✅ | ✅ | ❌ | ✅ | ❌ | cold-start flag | live |
-| [`splash`](#splash) | ✅ | ❌ | ✅ | ✅ | ✅ | draft accept % | live |
-| [`koboldcpp`](#koboldcpp) | ✅ | ❌ | ✅ | ✅ | ❌ | draft accept % | live |
-| [`vllm`](#vllm) | ✅ | ✅ | ❌ | ✅ | ✅ | — | live |
-| [`sglang`](#sglang) | ✅ | ✅ | ❌ | ✅ | ✅ | — | live |
-| [`vllmmlx`](#vllmmlx) | ✅ | ✅ | ❌ | ✅ | ❌ | — | live |
-| [`aphrodite`](#aphrodite) | ✅ | ✅ | ❌ | ✅ | ✅ | — | derived |
-| [`lmdeploy`](#lmdeploy) | ✅ | ✅ | ✅ | ✅ | ❌ | — | synthetic |
-| anything else | ✅ | ✅ | ❌ | ✅ | ❌ | — | live |
+| Provider | tok/s | TTFT | Prefill tok/s | Exact tokens | Cache info | Extras | First turn | Validated |
+|---|---|---|---|---|---|---|---|---|
+| [`mtplx`](#mtplx) | ✅ | ✅ | ✅ | ✅ | ❌ | MTP accept % | ✅ | live |
+| [`omlx`](#omlx) | ✅ | 🟡 | ✅ | ✅ | ✅ | — | ✅ | live |
+| [`llamacpp`](#llamacpp) | ✅ | 🟡 | ✅ | ✅ | ❌ | — | ✅ | live |
+| [`llamafile`](#llamafile) | ✅ | 🟡 | ✅ | ✅ | ❌ | — | ✅ | live |
+| [`mlxserve`](#mlxserve) | ✅ | ✅ | ❌ | ✅ | ❌ | cold-start flag | ✅ | live |
+| [`splash`](#splash) | ✅ | 🟡 | ✅ | ✅ | ✅ | draft accept % | ❌ | live |
+| [`koboldcpp`](#koboldcpp) | ✅ | 🟡 | ✅ | ✅ | ❌ | draft accept % | ✅ | live |
+| [`vllm`](#vllm) | ✅ | ✅ | ❌ | ✅ | ✅ | — | ❌ | live |
+| [`sglang`](#sglang) | ✅ | ✅ | ❌ | ✅ | ✅ | — | ❌ | live |
+| [`vllmmlx`](#vllmmlx) | ✅ | ✅ | ❌ | ✅ | ❌ | — | ❌ | live |
+| [`aphrodite`](#aphrodite) | ✅ | ✅ | ❌ | ✅ | ✅ | — | ❌ | derived |
+| [`lmdeploy`](#lmdeploy) | ✅ | ✅ | ✅ | ✅ | ❌ | — | ❌ | synthetic |
+| anything else | 🟡 | 🟡 | ❌ | 🟡 | ❌ | — | — | live |
+
+### Key
+
+- ✅ Provided by the engine
+- 🟡 Provided by OpenCode's universal layer, labelled `(host)` next to an
+  engine's figures. OpenCode's timing spans queue, network and event
+  delivery as well as prefill, so it is not the same measurement an engine
+  reports.
+- ❌ Not available
+
+### First Turn Data
+
+Most engines expose **cumulative counters**, not per-request figures: a turn
+is the difference between a reading before it and one after. This plugin
+takes a first reading of `omlx`, `llamacpp` and `llamafile` when OpenCode
+starts, so those have engine telemetry from the very first turn; `mtplx`,
+`koboldcpp` and `mlxserve` publish per-request figures and need no reading
+before. `splash` and the Prometheus engines (`vllm`, `sglang`, `vllmmlx`,
+`aphrodite`, `lmdeploy`) show the universal line on the first turn, marked
+`engine telemetry from the next turn`, then engine telemetry from the second
+turn on. Nothing is broken and nothing is lost: a rate invented from a
+single counter reading would describe the server's whole history, not your
+turn.
 
 `Validated` — **live**: run against a real server, deltas checked against
 its own response. **derived**: a real vLLM capture with the metric prefix
@@ -180,6 +209,13 @@ splash opencode
 
 Both prefill and decode are separately engine-timed. Prefill stays honest on
 a cache hit — it counts only recomputed tokens, never the whole prompt.
+Splash reports no time to first token of its own, so the block shows
+OpenCode's, labelled `(host)`.
+
+Splash, `vllm` and `vllmmlx` all default to port 8000. With more than one of
+them configured, whichever server answers on 8000 is the one read, and the
+symptom is a misleading `model not found` from the wrong server. Give each a
+distinct port and set its `*BaseUrl` option to match.
 
 <a id="koboldcpp"></a>
 
@@ -315,7 +351,9 @@ line; any other id still works fully, with the universal layer only.
 - **Ruled out** (universal layer only, no server-wide telemetry exists):
   **ExLlamaV3 / TabbyAPI** — no Prometheus endpoint. **lightning-mlx** — no telemetry endpoint.
 - **TBD**: Modular MAX serve.
-- An optional keybind to toggle the panel independently of the sidebar.
+- Keybinds, a per-turn history panel, session figures and a full-detail
+  dialog shipped in [opencode-headsup](https://github.com/charlesnutter/opencode-headsup),
+  the OpenCode 2 successor. This line stays in maintenance.
 
 ## License
 
