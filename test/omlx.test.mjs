@@ -154,4 +154,11 @@ test("the loaded model wins over the configured default", () => {
   assert.equal(toOmlxSample({ default_model: "b" }).model, "b")
 })
 
+test("OpenCode's ttft is shown labelled (host) on both branches", () => {
+  assert.ok(formatOmlxLine(before, undefined, 2).includes("ttft 2.00s (host)"))
+  assert.ok(formatOmlxLine(afterOne, before, 2).includes("ttft 2.00s (host)"))
+  // Without one, the block is exactly as before.
+  assert.equal(formatOmlxLine(afterOne, before).split("\n").length, 4)
+})
+
 console.log(`\n${passed} passed`)

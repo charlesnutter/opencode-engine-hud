@@ -188,4 +188,12 @@ test("KoboldCpp: a normal single-generation turn carries no such note", () => {
   assert.ok(!out.includes("generations this turn"), out)
 })
 
+test("KoboldCpp: OpenCode's ttft is shown labelled (host), and only when there is one", () => {
+  const before = parseKoboldPerf(raw("koboldcpp-multigen-before.json"))
+  const after = parseKoboldPerf(raw("koboldcpp-multigen-after.json"))
+  const t = koboldTurn(after, before.total_gens)
+  assert.ok(formatKoboldLine(t, "m", 0.5).includes("ttft 0.50s (host)"))
+  assert.ok(!formatKoboldLine(t, "m").includes("ttft"))
+})
+
 console.log(`\n${passed} passed`)

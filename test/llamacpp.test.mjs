@@ -142,4 +142,13 @@ test("missing rates are omitted, never rendered as placeholders", () => {
   assert.equal(out.split("\n").length, 2)
 })
 
+// ---- OpenCode's ttft, for an engine that times none ----------------------------
+test("OpenCode's ttft is shown labelled (host), never as the engine's", () => {
+  const t = diffLlamaCppCounters(before, after)
+  const out = formatLlamaCppLine(t, "llama.cpp", "m", 1.234).split("\n")
+  assert.ok(out.includes("ttft 1.23s (host)"), out.join(" | "))
+  assert.ok(!out.some((l) => /^ttft [\d.]+s$/.test(l)), "a bare ttft would read as the engine's")
+  assert.equal(formatLlamaCppLine(t, "llama.cpp", "m").split("\n").length, 4, "no ttft line without one")
+})
+
 console.log(`\n${passed} passed`)

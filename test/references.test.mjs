@@ -124,4 +124,18 @@ test("tui.tsx: every local module it imports from actually exports those names",
   assert.deepEqual(problems, [], problems.join("; "))
 })
 
+// ---- the package exposes the TUI entrypoint only ------------------------------
+// OpenCode's resolver (resolvePackageEntrypoint, identical at 1.18.32 and 2.x)
+// reads exports["./<kind>"], and for the server only, "main". The successor
+// plugin shipped "main" once and its server process loaded the TUI code
+// (`ctx.storage.memory is not a function`). A bare "." is the same invitation
+// to other tooling, so none of the three may appear.
+test("package.json exposes ./tui only: no main, no ./server, no bare .", () => {
+  const pkg = JSON.parse(read("package.json"))
+  assert.ok(pkg.exports?.["./tui"], "the TUI entrypoint must stay declared")
+  assert.equal(pkg.main, undefined)
+  assert.equal(pkg.exports?.["./server"], undefined)
+  assert.equal(pkg.exports?.["."], undefined)
+})
+
 console.log(`\n${passed} passed`)
